@@ -131,7 +131,7 @@
 
 </style>
 <link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#095c40">
+<meta name="theme-color" content="#0ea5e9">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -793,7 +793,11 @@ function buildDrZaidGeminiPrompt(raw, p, mode){
   const context = p ? JSON.stringify({
     name:p.name, age:p.age, gender:p.gender, phone:p.phone, emr:p.emr, status:p.status,
     activeMedicines: activeMedsFor(p.id).map(m=>({name:m.name,dose:m.dose,frequency:m.frequency,duration:m.duration,status:m.status})),
-    lastPrescription: (db.prescriptions.filter(r=>r.patientId===p.id).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)))[0] || null)
+    activeAllergies: db.allergies.filter(a=>a.patientId===p.id && a.active==="Active").map(a=>({allergen:a.allergen,reaction:a.reaction,severity:a.severity})),
+    activeChronicConditions: db.chronicConditions.filter(c=>c.patientId===p.id && c.active==="Active").map(c=>({condition:c.condition,notes:c.notes})),
+    lastPrescription: (db.prescriptions.filter(r=>r.patientId===p.id).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)))[0] || null),
+    recentVisitHistory: db.prescriptions.filter(r=>r.patientId===p.id).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt))).slice(0,5).map(r=>({date:r.date,complaints:r.complaints,diagnosis:r.finalDiagnosis||r.workingDiagnosis,medicines:(r.medicines||[]).map(m=>m.name)})),
+    recentTimeline: db.timelineEvents.filter(t=>t.patientId===p.id).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt))).slice(0,8).map(t=>({type:t.type,detail:t.detail,at:t.createdAt}))
   }) : "No selected patient";
 
   return `You are the backend AI scribe for Dr. Zaid Shafique MBBS, Family Physician. 
@@ -815,6 +819,9 @@ CRITICAL RULES:
 13. Add safetyWarnings for pregnancy/reproductive age female, child/adolescent, CKD/raised creatinine, raised LFTs, allergy, chest pain, severe fever, dehydration, hypoglycemia, hyperkalemia/hypokalemia, NSAID risk, or antibiotic misuse risk, only when clinically relevant to what was written.
 14. This is a DRAFT only. Doctor approval is mandatory before any prescription is finalized.
 15. Keep the output professional, clean, and similar to a prescription generated for Dr. Zaid.
+16. CRITICAL SAFETY: Check activeAllergies before suggesting or continuing ANY medicine. If a medicine in the doctor note matches or is cross-reactive with a listed allergen, do NOT include it — instead add a safetyWarning explaining the conflict and leave that medicine out.
+17. Use recentVisitHistory and recentTimeline to understand this patient's pattern over time (recurring complaints, chronic condition trend, past medicine response) and let it inform followupComparison-style context in clinicalNotes, but never invent facts not present in this history.
+18. Use activeChronicConditions to keep management consistent with ongoing conditions (e.g. diabetes, hypertension) unless the doctor note says otherwise.
 
 DR. ZAID STYLE:
 - Presenting Complaints: clean bullet-like lines, no diagnosis mixed inside complaints.
@@ -866,7 +873,7 @@ Expected: complaints ["Fever"], temperature "101", pulse "110", investigations [
 Doctor note: "bp 160/100 old patient hypertension continue losartan 50 od"
 Expected: bp "160/100", medicine Losartan 50 OD status Continue, working diagnosis hypertension follow-up, safetyWarnings if relevant.
 
-SELECTED PATIENT CONTEXT:
+SELECTED PATIENT CONTEXT (includes allergies, chronic conditions, and recent visit memory — use this to make the draft progressively more relevant over time):
 ${context}
 
 DOCTOR NOTE:
@@ -893,6 +900,7 @@ Return exactly this JSON shape and nothing else:
   "safetyWarnings": []
 }`;
 }
+
 
 async function generatePrescriptionDraftWithGemini(key, mode="draft"){let raw=qs("quickNote").value.trim();if(!raw){alert("Type or dictate patient note first.");return}if(qs("autoVoiceCorrection")&&qs("autoVoiceCorrection").checked){try{autoCorrectVoiceText(false);raw=qs("quickNote").value.trim()}catch(e){}}setAIStatus("Generating Dr. Zaid style draft with "+selectedAIProviderLabel()+"...","working");let p=selectedPatient();let prompt=buildDrZaidGeminiPrompt(raw,p,mode);try{let txt=await callSelectedAI(prompt,{json:true,maxOutputTokens:4000,temperature:0});let aiJson=parseAIJsonText(txt);applyAIJsonToForm(aiJson);if(!selectedPatientId)savePatient(false);let sp=selectedPatient();if(sp){addAudit(sp.id,"AI draft generated",selectedAIProviderLabel()+" generated Dr. Zaid style draft for doctor review.",true);addTimeline(sp.id,"AI draft generated","AI draft generated and loaded into editable form using "+selectedAIProviderLabel()+".",true)}setAIStatus("Draft generated with "+selectedAIProviderLabel(),"ready");setAILastError("");alert("AI draft generated with "+selectedAIProviderLabel()+". Please review carefully before approval.")}catch(err){setAIStatus("AI error - fallback parser used","error");setAILastError(String(err && err.message ? err.message : err));alert("Selected AI failed, using offline parser instead. Error: "+err.message);parseQuickNote()}}
 
