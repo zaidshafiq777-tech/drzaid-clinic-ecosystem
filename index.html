@@ -178,6 +178,7 @@
   </div>
 </div>
 <button id="logoutBtnFixed" style="display:none" onclick="clinicLogout()">Logout</button>
+<button id="viewToggleBtn" style="display:none;position:fixed;top:10px;right:90px;z-index:9999;background:#095c40;color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;opacity:.85" onclick="toggleFullView()">Show All Sections</button>
 <script>
 async function clinicLogin(){
   const email=document.getElementById('authEmail').value.trim();
@@ -197,6 +198,7 @@ async function clinicLogin(){
     window.CLINIC_SESSION.profile=profile;
     msg.className='ok'; msg.textContent='Welcome, '+(profile.full_name||email)+' ('+profile.role+'). Syncing cloud data...';
     await cloudSyncOnLogin();
+    applyRoleBasedView();
     msg.textContent='Welcome, '+(profile.full_name||email)+' ('+profile.role+')';
     setTimeout(()=>{
       document.getElementById('authGateOverlay').style.display='none';
@@ -220,6 +222,7 @@ async function clinicLogout(){
       window.CLINIC_SESSION.user=data.session.user;
       window.CLINIC_SESSION.profile=profile;
       await cloudSyncOnLogin();
+      applyRoleBasedView();
       document.getElementById('authGateOverlay').style.display='none';
       document.getElementById('logoutBtnFixed').style.display='block';
     }
@@ -647,6 +650,43 @@ async function cloudSyncOnLogin(){
       console.log('[Cloud Sync] No cloud backup found, uploaded current data as first backup');
     }
   }catch(e){console.warn('[Cloud Sync] Error',e)}
+}
+async function cloudLogoutButtonSetup(){}
+const ROLE_SECTION_MAP = {
+  'Reception Dashboard': ['receptionist'],
+  'Appointment Booking': ['receptionist'],
+  'Payment / Fee Status': ['receptionist','billing'],
+  'Vitals Screening': ['vitals_staff','nurse'],
+  'Billing Summary': ['billing'],
+  'Live Clinic Timeline (All Patients Today)': ['receptionist','doctor']
+};
+const ROLE_VIEW_ALWAYS_FULL = ['org_owner','branch_admin','super_admin'];
+function applyRoleBasedView(){
+  const role = window.CLINIC_SESSION && window.CLINIC_SESSION.profile ? window.CLINIC_SESSION.profile.role : null;
+  if(!role) return;
+  const showAll = localStorage.getItem('clinicViewShowAll')==='true';
+  document.querySelectorAll('h2').forEach(h2=>{
+    const text = (h2.textContent||'').trim();
+    for(const key in ROLE_SECTION_MAP){
+      if(text.indexOf(key)!==-1){
+        const allowedRoles = ROLE_SECTION_MAP[key];
+        const card = h2.closest('.card') || h2.parentElement;
+        if(!card) return;
+        const shouldHide = !ROLE_VIEW_ALWAYS_FULL.includes(role) && !allowedRoles.includes(role) && !showAll;
+        card.style.display = shouldHide ? 'none' : '';
+      }
+    }
+  });
+  const toggleBtn = document.getElementById('viewToggleBtn');
+  if(toggleBtn){
+    toggleBtn.style.display = ROLE_VIEW_ALWAYS_FULL.includes(role) ? 'none' : 'block';
+    toggleBtn.textContent = showAll ? '🔽 Simple View' : '🔼 Show All Sections';
+  }
+}
+function toggleFullView(){
+  const cur = localStorage.getItem('clinicViewShowAll')==='true';
+  localStorage.setItem('clinicViewShowAll', (!cur).toString());
+  applyRoleBasedView();
 }
 function uid(p){return p+"_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,9)}function seedIfEmpty(){
   // v8.3 Clinic Live Copy: keep existing browser patient data using the old live STORAGE_KEY.
