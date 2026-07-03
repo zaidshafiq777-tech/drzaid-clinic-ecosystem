@@ -942,7 +942,26 @@ Return exactly this JSON shape and nothing else:
 }
 
 
-async function generatePrescriptionDraftWithGemini(key, mode="draft"){let raw=qs("quickNote").value.trim();if(!raw){alert("Type or dictate patient note first.");return}if(qs("autoVoiceCorrection")&&qs("autoVoiceCorrection").checked){try{autoCorrectVoiceText(false);raw=qs("quickNote").value.trim()}catch(e){}}setAIStatus("Generating Dr. Zaid style draft with "+selectedAIProviderLabel()+"...","working");let p=selectedPatient();let prompt=buildDrZaidGeminiPrompt(raw,p,mode);try{let txt=await callSelectedAI(prompt,{json:true,maxOutputTokens:4000,temperature:0});let aiJson=parseAIJsonText(txt);applyAIJsonToForm(aiJson);if(!selectedPatientId)savePatient(false);let sp=selectedPatient();if(sp){addAudit(sp.id,"AI draft generated",selectedAIProviderLabel()+" generated Dr. Zaid style draft for doctor review.",true);addTimeline(sp.id,"AI draft generated","AI draft generated and loaded into editable form using "+selectedAIProviderLabel()+".",true)}setAIStatus("Draft generated with "+selectedAIProviderLabel(),"ready");setAILastError("");alert("AI draft generated with "+selectedAIProviderLabel()+". Please review carefully before approval.")}catch(err){setAIStatus("AI error - fallback parser used","error");setAILastError(String(err && err.message ? err.message : err));alert("Selected AI failed, using offline parser instead. Error: "+err.message);parseQuickNote()}}
+async function generatePrescriptionDraftWithGemini(key, mode="draft"){let raw=qs("quickNote").value.trim();if(!raw){alert("Type or dictate patient note first.");return}if(qs("autoVoiceCorrection")&&qs("autoVoiceCorrection").checked){try{autoCorrectVoiceText(false);raw=qs("quickNote").value.trim()}catch(e){}}setAIStatus("Generating Dr. Zaid style draft with "+selectedAIProviderLabel()+"...","working");let p=selectedPatient();let prompt=buildDrZaidGeminiPrompt(raw,p,mode);try{let txt=await callSelectedAI(prompt,{json:true,maxOutputTokens:4000,temperature:0});let aiJson=parseAIJsonText(txt);applyAIJsonToForm(aiJson);if(!selectedPatientId)savePatient(false);let sp=selectedPatient();if(sp){addAudit(sp.id,"AI draft generated",selectedAIProviderLabel()+" generated Dr. Zaid style draft for doctor review.",true);addTimeline(sp.id,"AI draft generated","AI draft generated and loaded into editable form using "+selectedAIProviderLabel()+".",true)}setAIStatus("Draft generated with "+selectedAIProviderLabel(),"ready");setAILastError("");alert("AI draft generated with "+selectedAIProviderLabel()+". Please review carefully before approval.")}catch(err){
+  let raw_msg=String(err && err.message ? err.message : err);
+  let friendly="AI request failed.";
+  if(/fetch|network|Failed to fetch|NetworkError/i.test(raw_msg)){
+    friendly="Cannot reach the AI service (n8n webhook may be inactive, or no internet connection). Using offline parser instead.";
+  }else if(/CORS/i.test(raw_msg)){
+    friendly="Blocked by browser security (CORS). The n8n webhook response headers may need adjusting. Using offline parser instead.";
+  }else if(/JSON|Unexpected token|parse/i.test(raw_msg)){
+    friendly="AI returned an unreadable response (invalid JSON). Using offline parser instead.";
+  }else if(/429|quota|rate.?limit/i.test(raw_msg)){
+    friendly="AI provider rate limit reached (fallback provider should auto-engage on next try). Using offline parser instead.";
+  }else if(/401|403|key|unauthorized/i.test(raw_msg)){
+    friendly="AI provider rejected the request (check API key/credentials in n8n). Using offline parser instead.";
+  }else{
+    friendly="AI provider error: "+raw_msg+". Using offline parser instead.";
+  }
+  setAIStatus("AI error - fallback parser used","error");setAILastError(raw_msg);
+  alert(friendly);
+  parseQuickNote()
+}}
 
 async function generateDrZaidOneClickDraft(){
   if(!ensureSelectedAIOrFallback()){
@@ -2661,6 +2680,30 @@ function fdFindOrCreatePatient(name,age,gender,phone){
   addAudit(p.id,"Patient created","Agentic intake created patient with minimum required fields.",false);
   return p;
 }
+const N8N_INTAKE_AGENT_URL="https://drzaid.app.n8n.cloud/webhook/patient-intake";
+async function n8nSyncIntake(patient, visit){
+  const badge = qs("fdIntakeResult");
+  try{
+    const res = await fetch(N8N_INTAKE_AGENT_URL, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        phone: patient.phone, name: patient.name, age: patient.age, gender: patient.gender,
+        complaint: visit.mainComplaint, visit_mode: visit.visitType==="Online"?"online":"in_clinic",
+        source: (visit.entryChannel||"reception").toLowerCase().replace(/[^a-z]/g,"_")
+      })
+    });
+    if(!res.ok) throw new Error("n8n responded with status "+res.status);
+    const data = await res.json();
+    if(!data || data.success!==true) throw new Error("n8n returned invalid response");
+    if(badge) badge.innerHTML += "<br><small style='color:#059669'>☁ Cloud-synced (Token #"+data.tokenNumber+")</small>";
+    return data;
+  }catch(e){
+    console.warn("[n8n Intake Sync] Failed, local record is safe:", e.message);
+    if(badge) badge.innerHTML += "<br><small style='color:#b45309'>⚠ Cloud sync pending (offline or AI router unavailable) — local record saved, will retry on next action.</small>";
+    return null;
+  }
+}
 function fdRegisterVisit(){
   let phone=qs("fdPhone").value.trim();
   let name=qs("fdName").value.trim();
@@ -2682,8 +2725,9 @@ function fdRegisterVisit(){
   addTimeline(p.id,"Token issued","Token #"+token+" issued via "+visit.entryChannel+" ("+visit.visitType+"). Complaint: "+(visit.mainComplaint||"--"),false);
   addAudit(p.id,"Visit registered","Agentic intake registered visit and issued token #"+token+".",false);
   saveDb();
-  qs("fdIntakeResult").innerHTML="<strong>Token #"+token+" issued</strong> for "+escapeHtml(p.name)+" ("+escapeHtml(p.emr)+"). Next: Vitals Screening, then Payment, then Doctor handoff.";
   fdClearIntake();
+  qs("fdIntakeResult").innerHTML="<strong>Token #"+token+" issued</strong> for "+escapeHtml(p.name)+" ("+escapeHtml(p.emr)+"). Next: Vitals Screening, then Payment, then Doctor handoff.";
+  n8nSyncIntake(p, visit);
   fdRefreshAll();
 }
 
