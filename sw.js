@@ -1,5 +1,5 @@
 const CACHE_NAME = "drzaid-clinic-v2";
-const APP_SHELL = ["/manifest.json", "/icon-192.png", "/icon-512.png"];
+const APP_SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
