@@ -537,6 +537,43 @@ async function clinicLogout(){
 </div>
 </div>
 
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">🤖 Agentic Reception (1-Click)</h2>
+<div class="card" id="agenticIntakeCard">
+<h2>Patient Intake Agent <span class="pill green">AI khud form bharega</span></h2>
+<div class="api-note">Reception sirf ek line likhe (ya bole) — jaise: <em>"Ali Ahmed 03001234567, 34 saal, mard, bukhar aur khansi 3 din se"</em> — agent khud naam, phone, umar, complaint nikalega, patient check karega, aur token bana dega. Koi box select nahi karna.</div>
+<textarea id="agenticIntakeInput" rows="2" style="width:100%;box-sizing:border-box" placeholder="Patient ki details ek hi line mein likho... (Roman Urdu / Urdu / English sab chalega)"></textarea>
+<div style="margin-top:8px">
+<button class="success" onclick="agenticReceptionIntake()" id="agenticIntakeBtn">🤖 Agent Chalao — Token Banao</button>
+<span id="agenticIntakeStatus" style="font-size:12.5px;color:#64748b;margin-left:8px"></span>
+</div>
+<div id="agenticIntakeResult" style="margin-top:10px"></div>
+</div>
+<script>
+async function agenticReceptionIntake(){
+  const raw=qs("agenticIntakeInput").value.trim();
+  const st=qs("agenticIntakeStatus"),res=qs("agenticIntakeResult"),btn=qs("agenticIntakeBtn");
+  if(!raw){alert("Pehle patient ki details likho.");return}
+  if(!window.CLINIC_ORG_ID){alert("Pehle login karo.");return}
+  btn.disabled=true;st.textContent="🧠 Agent samajh raha hai...";res.innerHTML="";
+  try{
+    const prompt='Extract patient intake info from this reception text (may be Roman Urdu, Urdu, or English). Return ONLY valid JSON, no markdown, exactly this shape: {"phone":"03xxxxxxxxx or empty","name":"full name","age":number or null,"gender":"male" or "female" or "","complaint":"chief complaint in English","visit_mode":"in_clinic"}. Text: '+raw;
+    let out=await callSelectedAI(prompt,{json:true,maxOutputTokens:400,temperature:0});
+    out=String(out).replace(/```json|```/g,"").trim();
+    const data=JSON.parse(out);
+    if(!data.phone&&!data.name)throw new Error("Agent ko naam ya phone nahi mila, thoda aur detail likho.");
+    st.textContent="📞 Patient check + token ban raha hai...";
+    const resp=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone:data.phone||"",name:data.name||"",age:data.age||null,gender:data.gender||"",complaint:data.complaint||raw,visit_mode:data.visit_mode||"in_clinic",source:"reception"})});
+    if(!resp.ok)throw new Error("Intake agent error: "+resp.status);
+    const r=await resp.json();
+    st.textContent="";btn.disabled=false;
+    res.innerHTML='<div class="list-item" style="border-left:4px solid #059669"><strong style="font-size:20px">🎫 Token #'+escapeHtml(String(r.tokenNumber))+'</strong><br><strong>'+escapeHtml(data.name||"")+'</strong> | '+escapeHtml(data.phone||"")+' | '+escapeHtml(data.complaint||"")+'<br><small>Patient/visit/token cloud mein ban gaye. Queue mein shamil.</small></div>';
+    qs("agenticIntakeInput").value="";
+  }catch(e){
+    btn.disabled=false;st.textContent="";
+    res.innerHTML='<div class="list-item" style="border-left:4px solid #dc2626">❌ '+escapeHtml(e.message||String(e))+'</div>';
+  }
+}
+</script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">☁ Cloud Queues (Agentic)</h2>
 <div class="card" id="cloudQueuesCard">
 <h2>Pharmacy & Lab Queues <span class="pill green">Auto-routed by AI Agents</span></h2>
