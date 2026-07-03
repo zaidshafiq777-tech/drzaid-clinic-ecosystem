@@ -537,6 +537,40 @@ async function clinicLogout(){
 </div>
 </div>
 
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">☁ Cloud Queues (Agentic)</h2>
+<div class="card" id="cloudQueuesCard">
+<h2>Pharmacy & Lab Queues <span class="pill green">Auto-routed by AI Agents</span></h2>
+<div class="api-note">Ye queues n8n agents khud bharte hain jab doctor prescription approve karta hai. Pharmacist dispense kare, Lab technician complete kare.</div>
+<div style="margin:8px 0"><button class="success" onclick="cloudLoadQueues()">🔄 Refresh Queues</button> <span id="cloudQueueStatus" style="font-size:12px;color:#64748b"></span></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<div><h3 style="margin:6px 0">💊 Pharmacy Queue</h3><div id="cloudPharmacyList" style="max-height:300px;overflow:auto">Login karke Refresh dabao.</div></div>
+<div><h3 style="margin:6px 0">🔬 Lab Queue</h3><div id="cloudLabList" style="max-height:300px;overflow:auto">Login karke Refresh dabao.</div></div>
+</div>
+</div>
+<script>
+async function cloudLoadQueues(){
+  const st=qs("cloudQueueStatus");
+  try{
+    if(!window.CLINIC_ORG_ID){if(st)st.textContent="Pehle login karo.";return}
+    if(st)st.textContent="Loading...";
+    const [ph,lb]=await Promise.all([
+      sb.from('pharmacy_queue').select('*, patients(full_name)').eq('organization_id',window.CLINIC_ORG_ID).neq('status','dispensed').order('created_at',{ascending:true}).limit(50),
+      sb.from('lab_queue').select('*, patients(full_name)').eq('organization_id',window.CLINIC_ORG_ID).not('status','in','("completed","verified")').order('created_at',{ascending:true}).limit(50)
+    ]);
+    const phRows=ph.data||[],lbRows=lb.data||[];
+    qs("cloudPharmacyList").innerHTML=phRows.length?phRows.map(r=>`<div class="list-item"><strong>${escapeHtml(r.medicine_name)}</strong> ${escapeHtml(r.dosage||"")} ${escapeHtml(r.frequency||"")} ${escapeHtml(r.duration||"")}<br><small>Patient: ${escapeHtml(r.patients?.full_name||"--")} | Status: ${escapeHtml(r.status)}</small><br><button class="success" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('pharmacy_queue','${r.id}','dispensed')">✓ Dispensed</button> <button class="warning" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('pharmacy_queue','${r.id}','unavailable')">Stock Nahi</button></div>`).join(""):"Koi pending medicine nahi.";
+    qs("cloudLabList").innerHTML=lbRows.length?lbRows.map(r=>`<div class="list-item"><strong>${escapeHtml(r.test_name)}</strong><br><small>Patient: ${escapeHtml(r.patients?.full_name||"--")} | Status: ${escapeHtml(r.status)}</small><br><button class="light" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('lab_queue','${r.id}','collected')">Sample Liya</button> <button class="success" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('lab_queue','${r.id}','completed')">✓ Complete</button></div>`).join(""):"Koi pending test nahi.";
+    if(st)st.textContent="Updated: "+new Date().toLocaleTimeString()+" | Pharmacy: "+phRows.length+" pending | Lab: "+lbRows.length+" pending";
+  }catch(e){if(st)st.textContent="Error: "+e.message;console.warn('[CloudQueues]',e)}
+}
+async function cloudUpdateQueue(table,id,status){
+  try{
+    const {error}=await sb.from(table).update({status}).eq('id',id);
+    if(error)throw error;
+    cloudLoadQueues();
+  }catch(e){alert("Update fail: "+e.message)}
+}
+</script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">⚙ Settings</h2>
 <div class="card" id="multiAiRouterCard"><h2>AI Provider Settings <span class="pill blue">Multi-AI</span></h2>
 <div class="api-note"><strong>Important:</strong> Gemini n8n proxy ke through secure hai (koi key nahi chahiye). Baaki providers ke liye browser-saved API key sirf personal/local testing ke liye hai.</div>
