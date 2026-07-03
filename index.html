@@ -538,11 +538,11 @@ async function clinicLogout(){
 </div>
 
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">⚙ Settings</h2>
-<div class="card" id="multiAiRouterCard"><h2>Gemini AI Settings <span class="pill blue">Gemini 2.5 Flash</span></h2>
-<div class="api-note"><strong>Important:</strong> Browser-saved API key is for personal/local testing only. For production, move key to secure backend.</div>
+<div class="card" id="multiAiRouterCard"><h2>AI Provider Settings <span class="pill blue">Multi-AI</span></h2>
+<div class="api-note"><strong>Important:</strong> Gemini n8n proxy ke through secure hai (koi key nahi chahiye). Baaki providers ke liye browser-saved API key sirf personal/local testing ke liye hai.</div>
 <div class="ai-router-box">
 <div class="ai-provider-grid">
-<div class="field"><label>AI Mode</label><select id="aiProvider" onchange="onAIProviderChange()"><option value="gemini">Gemini</option><option value="offline">Offline Parser</option></select></div>
+<div class="field"><label>AI Mode</label><select id="aiProvider" onchange="onAIProviderChange()"><option value="gemini">Gemini (Secure/Recommended)</option><option value="openai">OpenAI (ChatGPT)</option><option value="deepseek">DeepSeek</option><option value="groq">Groq (Llama)</option><option value="kimi">Kimi (Moonshot)</option><option value="grok">Grok (xAI)</option><option value="anthropic">Claude (Anthropic)</option><option value="openrouter">OpenRouter (Multi)</option><option value="offline">Offline Parser</option></select></div>
 <div class="field"><label>Model</label><select id="aiModel" onchange="saveAIProviderSettings()"></select></div>
 <div class="field"><label>AI Status</label><span id="aiProviderStatus" class="ai-status-line">No key saved</span></div>
 </div>
@@ -612,6 +612,13 @@ async function clinicLogout(){
 <script>
 const STORAGE_KEY="drzaid_offline_emr_mvp_repaired_v1";const CLINIC_GMAIL_STORAGE="drzaid_clinic_official_gmail";const DEFAULT_CLINIC_GMAIL="batalaclinic1234@gmail.com";const GEMINI_KEY_STORAGE="drzaid_gemini_25_flash_api_key";const AI_PROVIDER_SETTINGS_STORAGE="drzaid_multi_ai_provider_settings_v1";const AI_KEY_PREFIX="drzaid_ai_provider_key_";const AI_DEPRECATED_GEMINI_MODEL_RE=/^(models\/)?gemini-1\.5-/i;const AI_PROVIDER_CONFIGS={
   gemini:{label:"Gemini",kind:"gemini",defaultModel:"gemini-2.5-flash",baseUrl:"https://generativelanguage.googleapis.com/v1beta/models",models:["gemini-2.5-flash","gemini-2.0-flash","gemini-2.5-flash-lite"],fallbackModels:["gemini-2.5-flash","gemini-2.0-flash","gemini-2.5-flash-lite"]},
+  openai:{label:"OpenAI (ChatGPT)",kind:"openai",defaultModel:"gpt-4o-mini",baseUrl:"https://api.openai.com/v1/chat/completions",models:["gpt-4o-mini","gpt-4o","gpt-4.1-mini"],fallbackModels:["gpt-4o-mini"]},
+  deepseek:{label:"DeepSeek",kind:"deepseek",defaultModel:"deepseek-chat",baseUrl:"https://api.deepseek.com/chat/completions",models:["deepseek-chat","deepseek-reasoner"],fallbackModels:["deepseek-chat"]},
+  groq:{label:"Groq (Llama)",kind:"groq",defaultModel:"llama-3.3-70b-versatile",baseUrl:"https://api.groq.com/openai/v1/chat/completions",models:["llama-3.3-70b-versatile","llama-3.1-8b-instant"],fallbackModels:["llama-3.1-8b-instant"]},
+  kimi:{label:"Kimi (Moonshot)",kind:"kimi",defaultModel:"kimi-k2-turbo-preview",baseUrl:"https://api.moonshot.ai/v1/chat/completions",models:["kimi-k2-turbo-preview","moonshot-v1-8k"],fallbackModels:["moonshot-v1-8k"]},
+  grok:{label:"Grok (xAI)",kind:"grok",defaultModel:"grok-3-mini",baseUrl:"https://api.x.ai/v1/chat/completions",models:["grok-3-mini","grok-3"],fallbackModels:["grok-3-mini"]},
+  anthropic:{label:"Claude (Anthropic)",kind:"anthropic",defaultModel:"claude-sonnet-4-6",baseUrl:"https://api.anthropic.com/v1/messages",models:["claude-sonnet-4-6","claude-haiku-4-5-20251001"],fallbackModels:["claude-haiku-4-5-20251001"]},
+  openrouter:{label:"OpenRouter (Multi)",kind:"openrouter",defaultModel:"deepseek/deepseek-chat",baseUrl:"https://openrouter.ai/api/v1/chat/completions",models:["deepseek/deepseek-chat","google/gemini-2.0-flash-001","openai/gpt-4o-mini"],fallbackModels:["deepseek/deepseek-chat"]},
   offline:{label:"Offline Parser Only",kind:"offline",defaultModel:"offline-rule-parser",baseUrl:"",models:["offline-rule-parser"],fallbackModels:["offline-rule-parser"]}
 };let recognition=null;let isVoiceListening=false;let db={patients:[],prescriptions:[],reports:[],specialistOpinions:[],timelineEvents:[],activeMedications:[],allergies:[],chronicConditions:[],referrals:[],patientFiles:[],customFields:[],auditLogs:[],clinicalMemoryNotes:[],visits:[],appointments:[],pharmacyQueue:[],labQueue:[]};let currentVisitId=null;let selectedPatientId=null,currentMedicines=[],currentPrescriptionId=null;const qs=id=>document.getElementById(id),today=()=>new Date().toISOString().slice(0,10),nowLabel=()=>new Date().toLocaleString();document.addEventListener("DOMContentLoaded",()=>{loadDb();seedIfEmpty();setDefaultDates();renderPatientList();newPatient(false);loadGeminiKeySettings();loadClinicGmailSettings();updatePreview()});function loadDb(){const raw=localStorage.getItem(STORAGE_KEY);if(raw){try{db=JSON.parse(raw)}catch{localStorage.removeItem(STORAGE_KEY)}}["patients","prescriptions","reports","specialistOpinions","timelineEvents","activeMedications","allergies","chronicConditions","referrals","patientFiles","customFields","auditLogs","clinicalMemoryNotes","visits","appointments","pharmacyQueue","labQueue"].forEach(k=>{if(!Array.isArray(db[k]))db[k]=[]})}function saveDb(){localStorage.setItem(STORAGE_KEY,JSON.stringify(db));renderPatientList();renderAllPatientModules();updateActiveMedsBox();cloudPushDebounced()}
 let _cloudPushTimer=null;
