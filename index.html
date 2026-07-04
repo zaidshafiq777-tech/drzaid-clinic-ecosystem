@@ -650,6 +650,26 @@ async function qbSetStatus(tid,status){
 async function qbComplete(tid){
   try{
     const t=window.QB_ROWS&&QB_ROWS[tid];
+    if(t){
+      const [ph,lb]=await Promise.all([
+        sb.from('pharmacy_queue').select('amount').eq('visit_id',t.visit_id),
+        sb.from('lab_queue').select('amount').eq('visit_id',t.visit_id)
+      ]);
+      const phAmt=(ph.data||[]).reduce((s,r)=>s+(parseFloat(r.amount)||0),0);
+      const lbAmt=(lb.data||[]).reduce((s,r)=>s+(parseFloat(r.amount)||0),0);
+      const consult=parseFloat(t.fee)||0;
+      const total=consult+phAmt+lbAmt;
+      const alreadyPaidConsult=t.payment_status==='paid'?consult:0;
+      const due=total-alreadyPaidConsult;
+      let paidNow=0;
+      if(due>0){
+        const ans=prompt("🧾 BILL: Consult Rs."+consult+(t.payment_status==='paid'?" (paid)":"")+" + Pharmacy Rs."+phAmt+" + Lab Rs."+lbAmt+" = Total Rs."+total+"\nAbhi baqaya: Rs."+due+"\nKitna wasool hua? (0 = udhaar)",String(due));
+        paidNow=parseFloat(ans)||0;if(paidNow>due)paidNow=due;
+      }
+      const totalPaid=alreadyPaidConsult+paidNow;
+      const invStatus=totalPaid>=total?'paid':(totalPaid>0?'partial':'unpaid');
+      await sb.from('invoices').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,token_id:t.id,consultation_fee:consult,pharmacy_amount:phAmt,lab_amount:lbAmt,total,paid_amount:totalPaid,status:invStatus,payment_method:t.payment_method||null});
+    }
     const days=prompt("Follow-up kitne din baad? (khaali ya 0 = follow-up nahi)","3");
     const d=parseInt(days);
     if(d&&d>0&&t){
@@ -715,7 +735,8 @@ async function cloudUpdateQueue(table,id,status){
 async function qbLabComplete(id){
   try{
     const res=prompt("Test ka result likho (khaali chhor sakte ho):","");
-    const {error}=await sb.from('lab_queue').update({status:'completed',result:res||null}).eq('id',id);
+    const price=parseFloat(prompt("Test ka price (Rs, 0 = free):","0"))||0;
+    const {error}=await sb.from('lab_queue').update({status:'completed',result:res||null,amount:price}).eq('id',id);
     if(error)throw error;
     cloudLoadQueues();
   }catch(e){alert("Update fail: "+e.message)}
@@ -736,18 +757,59 @@ async function qbDispense(id){
         if(!confirm("Stock kam hai! Sirf "+totalAvail+" available, "+qty+" chahiye. Phir bhi dispense mark karein?"))return;
         remaining=totalAvail;
       }
+      let amount=0;
       for(const b of (batches||[])){
         if(remaining<=0)break;
         const take=Math.min(b.qty,remaining);
         await sb.from('medicine_batches').update({qty:b.qty-take}).eq('id',b.id);
         await sb.from('stock_ledger').insert({organization_id:window.CLINIC_ORG_ID,medicine_id:medId,batch_id:b.id,change_qty:-take,reason:'dispensed',ref_id:id,created_by:window.CLINIC_SESSION.user?.id||null});
+        amount+=take*(parseFloat(b.sale_price)||0);
         remaining-=take;
       }
+      window.__lastDispenseAmount=amount;
     }
-    const {error}=await sb.from('pharmacy_queue').update({status:'dispensed'}).eq('id',id);
+    const {error}=await sb.from('pharmacy_queue').update({status:'dispensed',amount:window.__lastDispenseAmount||0}).eq('id',id);window.__lastDispenseAmount=0;
     if(error)throw error;
     cloudLoadQueues();if(typeof loadInventory==='function')loadInventory();
   }catch(e){alert("Dispense fail: "+e.message)}
+}
+</script>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">🧾 Invoices & Udhaar</h2>
+<div class="card" id="invoicesCard">
+<h2>Invoices / Udhaar Ledger <span class="pill blue">Combined Billing</span></h2>
+<div style="margin:8px 0"><button class="success" onclick="loadInvoices()">🔄 Refresh</button> <span id="invcStatus" style="font-size:12px;color:#64748b"></span></div>
+<div id="invcList" style="max-height:340px;overflow:auto">Login karke Refresh dabao.</div>
+</div>
+<script>
+async function loadInvoices(){
+  const st=qs("invcStatus"),list=qs("invcList");
+  try{
+    if(!window.CLINIC_ORG_ID){st.textContent="Pehle login karo.";return}
+    st.textContent="Loading...";
+    const today=new Date();today.setHours(0,0,0,0);
+    const {data,error}=await sb.from('invoices').select('*,patients(full_name,phone)').eq('organization_id',window.CLINIC_ORG_ID).or('status.neq.paid,created_at.gte.'+today.toISOString()).order('created_at',{ascending:false}).limit(60);
+    if(error)throw error;
+    const rows=data||[];window.INV_ROWS={};rows.forEach(r=>INV_ROWS[r.id]=r);
+    list.innerHTML=rows.length?rows.map(v=>{
+      const due=(parseFloat(v.total)||0)-(parseFloat(v.paid_amount)||0);
+      const badge=v.status==='paid'?'<span class="pill green">✅ Paid</span>':(v.status==='partial'?'<span class="pill" style="background:#fef3c7;color:#92400e">Partial — baqaya Rs.'+due+'</span>':'<span class="pill" style="background:#fee2e2;color:#991b1b">Udhaar Rs.'+due+'</span>');
+      return '<div class="list-item"'+(v.status!=='paid'?' style="border-left:4px solid #d97706"':'')+'><strong>'+escapeHtml(v.patients?.full_name||"--")+'</strong> '+badge+'<br><small>Consult Rs.'+(v.consultation_fee||0)+' + Pharmacy Rs.'+(v.pharmacy_amount||0)+' + Lab Rs.'+(v.lab_amount||0)+' = <strong>Rs.'+(v.total||0)+'</strong> | Wasool: Rs.'+(v.paid_amount||0)+' | '+new Date(v.created_at).toLocaleDateString()+'</small>'+(due>0?'<br><button class="success" style="padding:4px 10px;font-size:12.5px" onclick="invcReceive(\''+v.id+'\')">💵 Wasool Karo</button>':'')+'</div>';
+    }).join(""):"Koi invoice nahi.";
+    const totalDue=rows.filter(r=>r.status!=='paid').reduce((s,r)=>s+((parseFloat(r.total)||0)-(parseFloat(r.paid_amount)||0)),0);
+    st.textContent="Kul baqaya: Rs."+totalDue.toLocaleString()+" | "+new Date().toLocaleTimeString();
+  }catch(e){st.textContent="Error: "+e.message}
+}
+async function invcReceive(id){
+  try{
+    const v=window.INV_ROWS&&INV_ROWS[id];if(!v)return;
+    const due=(parseFloat(v.total)||0)-(parseFloat(v.paid_amount)||0);
+    const amt=parseFloat(prompt("Kitna wasool hua? (baqaya Rs."+due+")",String(due)))||0;
+    if(amt<=0)return;
+    const newPaid=(parseFloat(v.paid_amount)||0)+Math.min(amt,due);
+    const status=newPaid>=(parseFloat(v.total)||0)?'paid':'partial';
+    const {error}=await sb.from('invoices').update({paid_amount:newPaid,status}).eq('id',id);
+    if(error)throw error;loadInvoices();
+  }catch(e){alert("Wasooli fail: "+e.message)}
 }
 </script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">📊 Daily Report</h2>
@@ -1055,6 +1117,7 @@ const ROLE_SECTION_MAP = {
   'Aaj Ki Token Queue': ['receptionist','vitals_staff','nurse','doctor'],
   'Pharmacy & Lab Queues': ['pharmacist','lab_technician','doctor'],
   'Aaj Ka Hisaab': ['billing','receptionist'],
+  'Invoices / Udhaar Ledger': ['billing','receptionist'],
   'Aaj Ke Follow-ups': ['receptionist','doctor'],
   'Stock / Batches / Expiry': ['pharmacist'],
   'Patient Ki Poori History': ['doctor','receptionist']
@@ -1065,8 +1128,8 @@ const ROLE_ALLOWED_HEADINGS = {
   lab_technician: ['Pharmacy & Lab Queues'],
   vitals_staff: ['Aaj Ki Token Queue','Vitals Screening'],
   nurse: ['Aaj Ki Token Queue','Vitals Screening'],
-  receptionist: ['Patient Intake Agent','Aaj Ki Token Queue','Aaj Ka Hisaab','Aaj Ke Follow-ups','Reception Dashboard','Appointment Booking','Payment / Fee Status','Live Clinic Timeline (All Patients Today)'],
-  billing: ['Aaj Ka Hisaab','Billing Summary','Payment / Fee Status']
+  receptionist: ['Patient Intake Agent','Aaj Ki Token Queue','Aaj Ka Hisaab','Invoices / Udhaar Ledger','Aaj Ke Follow-ups','Reception Dashboard','Appointment Booking','Payment / Fee Status','Live Clinic Timeline (All Patients Today)'],
+  billing: ['Aaj Ka Hisaab','Invoices / Udhaar Ledger','Billing Summary','Payment / Fee Status']
 };
 function applyRoleBasedView(){
  try{
