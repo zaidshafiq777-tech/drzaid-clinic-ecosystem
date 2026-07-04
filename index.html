@@ -621,7 +621,7 @@ window.addEventListener("load",()=>{setTimeout(()=>{try{if(window.CLINIC_ORG_ID)
 <div id="queueBoardList" style="max-height:420px;overflow:auto">Login karke Refresh dabao.</div>
 </div>
 <script>
-const QB_NEXT={registered:{label:"🩺 Vitals Lo",action:"vitals"},waiting_vitals:{label:"🩺 Vitals Lo",action:"vitals"},vitals_done:{label:"👨‍⚕️ Doctor Ke Paas",status:"with_doctor"},waiting_doctor:{label:"👨‍⚕️ Doctor Ke Paas",status:"with_doctor"},with_doctor:{label:"✅ Doctor Done",status:"doctor_done"},doctor_done:{label:"🏁 Complete",status:"completed"},sent_to_pharmacy:{label:"🏁 Complete",status:"completed"},sent_to_lab:{label:"🏁 Complete",status:"completed"},billing_pending:{label:"🏁 Complete",status:"completed"}};
+const QB_NEXT={registered:{label:"🩺 Vitals Lo",action:"vitals"},waiting_vitals:{label:"🩺 Vitals Lo",action:"vitals"},vitals_done:{label:"👨‍⚕️ Doctor Ke Paas",status:"with_doctor"},waiting_doctor:{label:"👨‍⚕️ Doctor Ke Paas",status:"with_doctor"},with_doctor:{label:"✅ Doctor Done",status:"doctor_done"},doctor_done:{label:"🏁 Complete",action:"complete"},sent_to_pharmacy:{label:"🏁 Complete",action:"complete"},sent_to_lab:{label:"🏁 Complete",action:"complete"},billing_pending:{label:"🏁 Complete",action:"complete"}};
 async function loadQueueBoard(){
   const st=qs("queueBoardStatus"),list=qs("queueBoardList");
   try{
@@ -630,12 +630,12 @@ async function loadQueueBoard(){
     const today=new Date();today.setHours(0,0,0,0);
     const {data:tokens,error}=await sb.from('tokens').select('id,token_number,status,payment_status,payment_method,fee,visit_id,patient_id,priority,patients(full_name,age),visits(chief_complaint)').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()).not('status','in','("completed","cancelled","no_show")').order('token_number');
     if(error)throw error;
-    const rows=tokens||[];
+    const rows=tokens||[];window.QB_ROWS={};rows.forEach(r=>QB_ROWS[r.id]=r);
     list.innerHTML=rows.length?rows.map(t=>{
       const nx=QB_NEXT[t.status];
       const payBadge=t.payment_status==='paid'?'<span class="pill green">Paid Rs.'+(t.fee||0)+'</span>':'<span class="pill" style="background:#fef3c7;color:#92400e">'+escapeHtml(t.payment_status)+' Rs.'+(t.fee||0)+'</span>';
       let btns='';
-      if(nx){btns=nx.action==='vitals'?'<button class="light" style="padding:4px 10px;font-size:12.5px" onclick="qbShowVitals(\''+t.id+'\',\''+t.visit_id+'\',\''+t.patient_id+'\')">'+nx.label+'</button>':'<button class="success" style="padding:4px 10px;font-size:12.5px" onclick="qbSetStatus(\''+t.id+'\',\''+nx.status+'\')">'+nx.label+'</button>'}
+      if(nx){btns=nx.action==='vitals'?'<button class="light" style="padding:4px 10px;font-size:12.5px" onclick="qbShowVitals(\''+t.id+'\')">'+nx.label+'</button>':(nx.action==='complete'?'<button class="success" style="padding:4px 10px;font-size:12.5px" onclick="qbComplete(\''+t.id+'\')">'+nx.label+'</button>':'<button class="success" style="padding:4px 10px;font-size:12.5px" onclick="qbSetStatus(\''+t.id+'\',\''+nx.status+'\')">'+nx.label+'</button>')}
       btns+=' <button class="warning" style="padding:4px 8px;font-size:11.5px" onclick="qbSetStatus(\''+t.id+'\',\'cancelled\')">✖</button>';
       return '<div class="list-item"'+(t.priority!=='normal'?' style="border-left:4px solid #dc2626"':'')+'><strong style="font-size:17px">#'+t.token_number+'</strong> <strong>'+escapeHtml(t.patients?.full_name||"--")+'</strong>'+(t.patients?.age?' ('+t.patients.age+')':'')+' '+payBadge+'<br><small>'+escapeHtml(t.visits?.chief_complaint||"--")+' | Status: <strong>'+escapeHtml(t.status)+'</strong></small><br>'+btns+'<div id="qbVitals_'+t.id+'" style="display:none;margin-top:6px;background:#f1f5f9;border-radius:8px;padding:8px"><input id="qv_bp_'+t.id+'" placeholder="BP (120/80)" style="width:90px;padding:5px;margin:2px"><input id="qv_pulse_'+t.id+'" placeholder="Pulse" style="width:60px;padding:5px;margin:2px"><input id="qv_temp_'+t.id+'" placeholder="Temp °F" style="width:70px;padding:5px;margin:2px"><input id="qv_spo2_'+t.id+'" placeholder="SpO2" style="width:60px;padding:5px;margin:2px"><input id="qv_wt_'+t.id+'" placeholder="Wzn kg" style="width:65px;padding:5px;margin:2px"><button class="success" style="padding:5px 10px;font-size:12px" onclick="qbSaveVitals(\''+t.id+'\',\''+t.visit_id+'\',\''+t.patient_id+'\')">💾 Save Vitals</button></div></div>';
     }).join(""):"Aaj koi active token nahi.";
@@ -645,6 +645,19 @@ async function loadQueueBoard(){
 function qbShowVitals(tid){const d=qs("qbVitals_"+tid);if(d)d.style.display=d.style.display==="none"?"block":"none"}
 async function qbSetStatus(tid,status){
   try{const {error}=await sb.from('tokens').update({status}).eq('id',tid);if(error)throw error;loadQueueBoard()}catch(e){alert("Update fail: "+e.message)}
+}
+async function qbComplete(tid){
+  try{
+    const t=window.QB_ROWS&&QB_ROWS[tid];
+    const days=prompt("Follow-up kitne din baad? (khaali ya 0 = follow-up nahi)","3");
+    const d=parseInt(days);
+    if(d&&d>0&&t){
+      const due=new Date();due.setDate(due.getDate()+d);
+      await sb.from('followups').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,due_date:due.toISOString().slice(0,10),reason:(t.visits&&t.visits.chief_complaint)||null,status:'pending'});
+    }
+    const {error}=await sb.from('tokens').update({status:'completed'}).eq('id',tid);if(error)throw error;
+    loadQueueBoard();if(typeof loadFollowups==='function')loadFollowups();
+  }catch(e){alert("Complete fail: "+e.message)}
 }
 async function qbSaveVitals(tid,vid,pid){
   try{
@@ -687,13 +700,21 @@ async function cloudLoadQueues(){
     ]);
     const phRows=ph.data||[],lbRows=lb.data||[];
     qs("cloudPharmacyList").innerHTML=phRows.length?phRows.map(r=>`<div class="list-item"><strong>${escapeHtml(r.medicine_name)}</strong> ${escapeHtml(r.dosage||"")} ${escapeHtml(r.frequency||"")} ${escapeHtml(r.duration||"")}<br><small>Patient: ${escapeHtml(r.patients?.full_name||"--")} | Status: ${escapeHtml(r.status)}</small><br><button class="success" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('pharmacy_queue','${r.id}','dispensed')">✓ Dispensed</button> <button class="warning" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('pharmacy_queue','${r.id}','unavailable')">Stock Nahi</button></div>`).join(""):"Koi pending medicine nahi.";
-    qs("cloudLabList").innerHTML=lbRows.length?lbRows.map(r=>`<div class="list-item"><strong>${escapeHtml(r.test_name)}</strong><br><small>Patient: ${escapeHtml(r.patients?.full_name||"--")} | Status: ${escapeHtml(r.status)}</small><br><button class="light" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('lab_queue','${r.id}','collected')">Sample Liya</button> <button class="success" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('lab_queue','${r.id}','completed')">✓ Complete</button></div>`).join(""):"Koi pending test nahi.";
+    qs("cloudLabList").innerHTML=lbRows.length?lbRows.map(r=>`<div class="list-item"><strong>${escapeHtml(r.test_name)}</strong><br><small>Patient: ${escapeHtml(r.patients?.full_name||"--")} | Status: ${escapeHtml(r.status)}</small><br><button class="light" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('lab_queue','${r.id}','collected')">Sample Liya</button> <button class="success" style="padding:4px 8px;font-size:12px" onclick="qbLabComplete('${r.id}')">✓ Complete</button></div>`).join(""):"Koi pending test nahi.";
     if(st)st.textContent="Updated: "+new Date().toLocaleTimeString()+" | Pharmacy: "+phRows.length+" pending | Lab: "+lbRows.length+" pending";
   }catch(e){if(st)st.textContent="Error: "+e.message;console.warn('[CloudQueues]',e)}
 }
 async function cloudUpdateQueue(table,id,status){
   try{
     const {error}=await sb.from(table).update({status}).eq('id',id);
+    if(error)throw error;
+    cloudLoadQueues();
+  }catch(e){alert("Update fail: "+e.message)}
+}
+async function qbLabComplete(id){
+  try{
+    const res=prompt("Test ka result likho (khaali chhor sakte ho):","");
+    const {error}=await sb.from('lab_queue').update({status:'completed',result:res||null}).eq('id',id);
     if(error)throw error;
     cloudLoadQueues();
   }catch(e){alert("Update fail: "+e.message)}
@@ -736,6 +757,42 @@ async function loadDailyReport(){
       (unpaid.length?'<div class="list-item" style="border-left:4px solid #d97706"><strong>Udhaar/Unpaid:</strong><br>'+unpaid.map(t=>'#'+t.token_number+' '+escapeHtml(t.patients?.full_name||'--')+' (Rs. '+(t.fee||0)+')').join('<br>')+'</div>':'');
     st.textContent="Updated: "+new Date().toLocaleTimeString();
   }catch(e){st.textContent="Error: "+e.message}
+}
+</script>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">📅 Follow-ups</h2>
+<div class="card" id="followupsCard">
+<h2>Aaj Ke Follow-ups <span class="pill blue">WhatsApp Yaad-dehani</span></h2>
+<div style="margin:8px 0"><button class="success" onclick="loadFollowups()">🔄 Refresh</button> <span id="fuStatus" style="font-size:12px;color:#64748b"></span></div>
+<div id="fuList" style="max-height:320px;overflow:auto">Login karke Refresh dabao.</div>
+</div>
+<script>
+async function loadFollowups(){
+  const st=qs("fuStatus"),list=qs("fuList");
+  try{
+    if(!window.CLINIC_ORG_ID){st.textContent="Pehle login karo.";return}
+    st.textContent="Loading...";
+    const today=new Date().toISOString().slice(0,10);
+    const {data,error}=await sb.from('followups').select('id,due_date,reason,status,reminded_at,patients(full_name,phone)').eq('organization_id',window.CLINIC_ORG_ID).eq('status','pending').lte('due_date',today).order('due_date');
+    if(error)throw error;
+    const rows=data||[];
+    list.innerHTML=rows.length?rows.map(f=>{
+      const overdue=f.due_date<today;
+      return '<div class="list-item"'+(overdue?' style="border-left:4px solid #dc2626"':'')+'><strong>'+escapeHtml(f.patients?.full_name||"--")+'</strong> | '+escapeHtml(f.patients?.phone||"--")+(overdue?' <span class="pill" style="background:#fee2e2;color:#991b1b">Missed '+escapeHtml(f.due_date)+'</span>':' <span class="pill green">Aaj due</span>')+'<br><small>'+escapeHtml(f.reason||"")+(f.reminded_at?' | Yaad-dehani bheji: '+new Date(f.reminded_at).toLocaleDateString():'')+'</small><br><button class="light" style="padding:4px 10px;font-size:12.5px" onclick="fuWhatsApp(\''+f.id+'\')">📱 WhatsApp Yaad-dehani</button> <button class="success" style="padding:4px 10px;font-size:12.5px" onclick="fuDone(\''+f.id+'\')">✓ Aa Gaye / Ho Gaya</button></div>';
+    }).join(""):"Aaj koi follow-up due nahi. 👍";
+    window.FU_ROWS={};rows.forEach(r=>FU_ROWS[r.id]=r);
+    st.textContent="Due/Missed: "+rows.length+" | "+new Date().toLocaleTimeString();
+  }catch(e){st.textContent="Error: "+e.message}
+}
+async function fuWhatsApp(id){
+  const f=window.FU_ROWS&&FU_ROWS[id];if(!f)return;
+  let ph=String(f.patients?.phone||"").replace(/[^0-9]/g,"");
+  if(ph.startsWith("0"))ph="92"+ph.slice(1);
+  const msg="Assalam o Alaikum "+(f.patients?.full_name||"")+", Dr. Zaid Clinic se yaad-dehani: aaj aapka follow-up checkup hai. Barah-e-karam clinic tashreef layein. Shukriya.";
+  window.open("https://wa.me/"+ph+"?text="+encodeURIComponent(msg),"_blank");
+  try{await sb.from('followups').update({reminded_at:new Date().toISOString()}).eq('id',id)}catch(e){}
+}
+async function fuDone(id){
+  try{const {error}=await sb.from('followups').update({status:'done'}).eq('id',id);if(error)throw error;loadFollowups()}catch(e){alert("Update fail: "+e.message)}
 }
 </script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">⚙ Settings</h2>
@@ -870,7 +927,8 @@ const ROLE_SECTION_MAP = {
   'Patient Intake Agent': ['receptionist'],
   'Aaj Ki Token Queue': ['receptionist','vitals_staff','nurse','doctor'],
   'Pharmacy & Lab Queues': ['pharmacist','lab_technician','doctor'],
-  'Aaj Ka Hisaab': ['billing','receptionist']
+  'Aaj Ka Hisaab': ['billing','receptionist'],
+  'Aaj Ke Follow-ups': ['receptionist','doctor']
 };
 const ROLE_VIEW_ALWAYS_FULL = ['org_owner','branch_admin','super_admin'];
 function applyRoleBasedView(){
