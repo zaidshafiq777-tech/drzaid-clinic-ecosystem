@@ -769,9 +769,45 @@ async function ddApprove(){
     if(d.follow_up_days&&d.follow_up_days>0){const due=new Date();due.setDate(due.getDate()+d.follow_up_days);await sb.from('followups').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,due_date:due.toISOString().slice(0,10),reason:d.diagnosis||t.visits?.chief_complaint||null,status:'pending'})}
     await sb.from('tokens').update({status:'doctor_done'}).eq('id',t.id);
     st.textContent="";qs("ddApproveBtn").style.display="none";
-    qs("ddDraftView").innerHTML='<div class="list-item" style="border-left:4px solid #059669"><strong>✅ Approved & Routed:</strong> '+escapeHtml(r.message||"pharmacy/lab queues update ho gaye")+'</div>';
+    window.DD_LAST={t:t,d:d};
+    qs("ddDraftView").innerHTML='<div class="list-item" style="border-left:4px solid #059669"><strong>✅ Approved & Routed:</strong> '+escapeHtml(r.message||"pharmacy/lab queues update ho gaye")+'<br><button class="light" style="padding:4px 10px;font-size:12.5px;margin-top:4px" onclick="ddPrintRx()">🖨️ Prescription Print Karo</button></div>';
     loadDoctorDesk();if(typeof loadQueueBoard==='function')loadQueueBoard();if(typeof cloudLoadQueues==='function')cloudLoadQueues();
   }catch(e){st.textContent="";alert("Approve fail: "+(e.message||e))}
+}
+function printHtml(title,body){
+  const w=window.open('','_blank');
+  if(!w){alert('Print ke liye popup allow karo');return}
+  w.document.write('<html><head><title>'+title+'</title><style>body{font-family:Arial,sans-serif;padding:24px;max-width:720px;margin:auto;color:#111}h1{font-size:20px;margin:0}h2{font-size:14px;color:#555;margin:2px 0 14px;font-weight:normal}table{width:100%;border-collapse:collapse;margin:10px 0}td,th{border:1px solid #999;padding:6px 8px;font-size:13px;text-align:left}th{background:#f1f5f9}.tot td{font-weight:bold}.ft{margin-top:34px;font-size:12px;color:#555;display:flex;justify-content:space-between}hr{border:none;border-top:2px solid #0a5c40;margin:8px 0 14px}</style></head><body>'+body+'<div class="ft"><span>Printed: '+new Date().toLocaleString()+'</span><span>Signature: ______________</span></div><script>window.onload=function(){window.print()}<\/script></body></html>');
+  w.document.close();
+}
+function ddPrintRx(){
+  const L=window.DD_LAST;if(!L){alert('Pehle koi prescription approve karo');return}
+  const t=L.t,d=L.d;
+  const medRows=(d.medicines||[]).filter(m=>m.name).map((m,i)=>'<tr><td>'+(i+1)+'</td><td>'+escapeHtml(m.name)+'</td><td>'+escapeHtml(m.dosage||'')+'</td><td>'+escapeHtml(m.frequency||'')+'</td><td>'+escapeHtml(m.duration||'')+'</td></tr>').join('');
+  const body='<h1>'+escapeHtml(window.CLINIC_NAME||'Clinic')+'</h1><h2>Prescription</h2><hr>'
+    +'<p><strong>Patient:</strong> '+escapeHtml(t.patients?.full_name||'')+(t.patients?.age?' | <strong>Age:</strong> '+t.patients.age:'')+(t.patients?.gender?' | '+escapeHtml(t.patients.gender):'')+' | <strong>Token:</strong> #'+t.token_number+' | <strong>Date:</strong> '+new Date().toLocaleDateString()+'</p>'
+    +'<p><strong>Complaint:</strong> '+escapeHtml(t.visits?.chief_complaint||'--')+'<br><strong>Diagnosis:</strong> '+escapeHtml(d.diagnosis||'--')+'</p>'
+    +(medRows?'<table><tr><th>#</th><th>Medicine</th><th>Dose</th><th>Frequency</th><th>Duration</th></tr>'+medRows+'</table>':'')
+    +((d.investigations||[]).length?'<p><strong>Investigations:</strong> '+(d.investigations||[]).map(escapeHtml).join(', ')+'</p>':'')
+    +(d.advice?'<p><strong>Advice:</strong> '+escapeHtml(d.advice)+'</p>':'')
+    +(d.follow_up_days?'<p><strong>Follow-up:</strong> '+d.follow_up_days+' din baad</p>':'');
+  printHtml('Prescription',body);
+}
+function invcPrint(id){
+  const v=window.INV_ROWS&&INV_ROWS[id];if(!v)return;
+  const due=(parseFloat(v.total)||0)-(parseFloat(v.paid_amount)||0);
+  const body='<h1>'+escapeHtml(window.CLINIC_NAME||'Clinic')+'</h1><h2>Invoice / Bill</h2><hr>'
+    +'<p><strong>Patient:</strong> '+escapeHtml(v.patients?.full_name||'')+' | <strong>Date:</strong> '+new Date(v.created_at).toLocaleDateString()+'</p>'
+    +'<table><tr><th>Item</th><th>Amount (Rs.)</th></tr>'
+    +'<tr><td>Consultation</td><td>'+(v.consultation_fee||0)+'</td></tr>'
+    +'<tr><td>Pharmacy / Medicines</td><td>'+(v.pharmacy_amount||0)+'</td></tr>'
+    +'<tr><td>Lab / Tests</td><td>'+(v.lab_amount||0)+'</td></tr>'
+    +(v.discount>0?'<tr><td>Discount</td><td>-'+v.discount+'</td></tr>':'')
+    +'<tr class="tot"><td>Total</td><td>'+(v.total||0)+'</td></tr>'
+    +'<tr><td>Paid</td><td>'+(v.paid_amount||0)+'</td></tr>'
+    +'<tr class="tot"><td>Baqaya</td><td>'+due+'</td></tr></table>'
+    +'<p><strong>Status:</strong> '+escapeHtml(v.status)+(v.payment_method?' | <strong>Method:</strong> '+escapeHtml(v.payment_method):'')+'</p>';
+  printHtml('Invoice',body);
 }
 </script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">☁ Cloud Queues (Agentic)</h2>
@@ -869,7 +905,7 @@ async function loadInvoices(){
     list.innerHTML=rows.length?rows.map(v=>{
       const due=(parseFloat(v.total)||0)-(parseFloat(v.paid_amount)||0);
       const badge=v.status==='paid'?'<span class="pill green">✅ Paid</span>':(v.status==='partial'?'<span class="pill" style="background:#fef3c7;color:#92400e">Partial — baqaya Rs.'+due+'</span>':'<span class="pill" style="background:#fee2e2;color:#991b1b">Udhaar Rs.'+due+'</span>');
-      return '<div class="list-item"'+(v.status!=='paid'?' style="border-left:4px solid #d97706"':'')+'><strong>'+escapeHtml(v.patients?.full_name||"--")+'</strong> '+badge+'<br><small>Consult Rs.'+(v.consultation_fee||0)+' + Pharmacy Rs.'+(v.pharmacy_amount||0)+' + Lab Rs.'+(v.lab_amount||0)+' = <strong>Rs.'+(v.total||0)+'</strong> | Wasool: Rs.'+(v.paid_amount||0)+' | '+new Date(v.created_at).toLocaleDateString()+'</small>'+(due>0?'<br><button class="success" style="padding:4px 10px;font-size:12.5px" onclick="invcReceive(\''+v.id+'\')">💵 Wasool Karo</button>':'')+'</div>';
+      return '<div class="list-item"'+(v.status!=='paid'?' style="border-left:4px solid #d97706"':'')+'><strong>'+escapeHtml(v.patients?.full_name||"--")+'</strong> '+badge+'<br><small>Consult Rs.'+(v.consultation_fee||0)+' + Pharmacy Rs.'+(v.pharmacy_amount||0)+' + Lab Rs.'+(v.lab_amount||0)+' = <strong>Rs.'+(v.total||0)+'</strong> | Wasool: Rs.'+(v.paid_amount||0)+' | '+new Date(v.created_at).toLocaleDateString()+'</small>'+'<br><button class="light" style="padding:4px 10px;font-size:12.5px" onclick="invcPrint(\''+v.id+'\')">🖨️ Print</button>'+(due>0?' <button class="success" style="padding:4px 10px;font-size:12.5px" onclick="invcReceive(\''+v.id+'\')">💵 Wasool Karo</button>':'')+'</div>';
     }).join(""):"Koi invoice nahi.";
     const totalDue=rows.filter(r=>r.status!=='paid').reduce((s,r)=>s+((parseFloat(r.total)||0)-(parseFloat(r.paid_amount)||0)),0);
     st.textContent="Kul baqaya: Rs."+totalDue.toLocaleString()+" | "+new Date().toLocaleTimeString();
@@ -1167,6 +1203,7 @@ async function cloudSyncOnLogin(){
     const orgId=window.CLINIC_SESSION.profile.organization_id;
     if(!orgId)return;
     window.CLINIC_ORG_ID=orgId;
+    try{const {data:o}=await sb.from('organizations').select('name').eq('id',orgId).single();window.CLINIC_NAME=(o&&o.name)||'Clinic'}catch(e){window.CLINIC_NAME='Clinic'}
     const {data,error}=await sb.from('clinic_data_backups').select('data,updated_at').eq('organization_id',orgId).maybeSingle();
     if(error){console.warn('[Cloud Sync] Fetch failed',error);return}
     if(data && data.data){
