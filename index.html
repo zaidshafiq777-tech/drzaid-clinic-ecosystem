@@ -567,12 +567,13 @@ async function agiAnswer(val,label){
   case "age":{const a=parseInt(String(val).replace(/[^0-9]/g,""));if(!a||a<0||a>120){agiAsk("Umar samajh nahi aayi — sirf number likhein (jaise 34)");return}AGI.data.age=a;AGI.step="gender";agiAsk("Patient <strong>mard hain ya khatoon</strong>?",[{label:"👨 Mard",value:"male"},{label:"👩 Khatoon",value:"female"}]);break}
   case "gender":{AGI.data.gender=val;AGI.step="complaint";agiAsk("Aaj <strong>kya masla/shikayat</strong> hai? (jaise: bukhar 3 din se)");break}
   case "complaint":{AGI.data.complaint=val;AGI.step="visit";agiAsk("Visit kaisi hogi?",[{label:"🏥 Clinic mein",value:"in_clinic"},{label:"💻 Online",value:"online"}]);break}
-  case "visit":{AGI.data.visit_mode=val;AGI.step="fee";agiAsk("<strong>Consultation fee</strong> kitni hai? (sirf raqam likhein)",[{label:"Rs. 500",value:"500"},{label:"Rs. 1000",value:"1000"},{label:"Rs. 1500",value:"1500",allowText:true}]);break}
+  case "visit":{AGI.data.visit_mode=val;AGI.step="priority";agiAsk("Kya ye <strong>emergency</strong> case hai?",[{label:"🟢 Normal",value:"normal"},{label:"🚨 Emergency",value:"emergency"}]);break}
+  case "priority":{AGI.data.priority=val;if(val==="emergency"){AGI.data.payment_status="unpaid";AGI.data.fee=0;AGI.data.method="Emergency";AGI.step="create";agiBubble("🚨 <strong>Emergency!</strong> Payment baad mein — pehle ilaaj. Token foran ban raha hai...","agent");agiAnswer("__go__","Emergency confirm")}else{AGI.step="fee";agiAsk("<strong>Consultation fee</strong> kitni hai? (sirf raqam likhein)",[{label:"Rs. 500",value:"500"},{label:"Rs. 1000",value:"1000"},{label:"Rs. 1500",value:"1500",allowText:true}])}break}
   case "fee":{const f=parseInt(String(val).replace(/[^0-9]/g,""));if(!f){agiAsk("Raqam samajh nahi aayi — sirf number likhein");return}AGI.data.fee=f;AGI.step="paymethod";agiAsk("Payment ka <strong>tareeqa</strong>?",[{label:"💵 Cash",value:"Cash"},{label:"📱 JazzCash",value:"JazzCash"},{label:"📱 EasyPaisa",value:"EasyPaisa"},{label:"💳 Card",value:"Card"},{label:"🕐 Udhaar (baad mein)",value:"Udhaar"}]);break}
   case "paymethod":{AGI.data.method=val;if(val==="Udhaar"){AGI.data.payment_status="unpaid";AGI.step="create";agiAnswer("__go__","Udhaar note kar liya")}else{AGI.step="payconfirm";agiAsk("💰 <strong>Rs. "+AGI.data.fee+"</strong> "+escapeHtml(val)+" se <strong>receive ho gayi?</strong> (Token payment ke baad hi banega)",[{label:"✅ Haan, received",value:"yes"},{label:"❌ Cancel",value:"no"}])}break}
   case "payconfirm":{if(val!=="yes"){agiAsk("Theek hai, token <strong>cancel</strong> — payment ke baghair token nahi banta. Naye patient ke liye ↺ dabayein.");AGI.step=null;return}AGI.data.payment_status="paid";AGI.step="create";agiAnswer("__go__","Payment confirm")}break;
   case "create":{agiBubble("🎫 Token ban raha hai...","agent");
-   const resp=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone:AGI.data.phone,name:AGI.data.name,age:AGI.data.age||null,gender:AGI.data.gender||"",complaint:AGI.data.complaint,visit_mode:AGI.data.visit_mode,source:"reception",payment_status:AGI.data.payment_status,payment_method:AGI.data.method||"",fee:AGI.data.fee||0})});
+   const resp=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone:AGI.data.phone,name:AGI.data.name,age:AGI.data.age||null,gender:AGI.data.gender||"",complaint:AGI.data.complaint,visit_mode:AGI.data.visit_mode,source:AGI.data.priority==="emergency"?"emergency":"reception",priority:AGI.data.priority||"normal",payment_status:AGI.data.payment_status,payment_method:AGI.data.method||"",fee:AGI.data.fee||0})});
    if(!resp.ok)throw new Error("Agent error "+resp.status);
    const r=await resp.json();
    agiAsk('<div style="border-left:4px solid #059669;padding-left:10px"><strong style="font-size:22px">🎫 Token #'+escapeHtml(String(r.tokenNumber))+'</strong><br>'+escapeHtml(AGI.data.name)+" | "+escapeHtml(AGI.data.complaint)+"<br>💰 Rs. "+AGI.data.fee+" — "+escapeHtml(AGI.data.method)+" ("+(AGI.data.payment_status==="paid"?"✅ Paid":"🕐 Udhaar")+')<br><small>Patient queue mein shamil ho gaya.</small></div>',[{label:"➕ Agla patient",value:"__restart__"}]);
@@ -759,6 +760,50 @@ async function loadDailyReport(){
   }catch(e){st.textContent="Error: "+e.message}
 }
 </script>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">🔍 Cloud Patient Record</h2>
+<div class="card" id="cloudRecordCard">
+<h2>Patient Ki Poori History <span class="pill blue">Doctor Memory</span></h2>
+<div style="display:flex;gap:6px;margin:8px 0">
+<input id="crSearch" style="flex:1;padding:9px 10px;border:1px solid #cbd5e1;border-radius:8px" placeholder="Phone ya naam se dhoondo..." onkeydown="if(event.key==='Enter')crFind()">
+<button class="success" onclick="crFind()">🔍 Dhoondo</button>
+</div>
+<div id="crResults"></div>
+<div id="crRecord" style="max-height:420px;overflow:auto"></div>
+</div>
+<script>
+async function crFind(){
+  const q=qs("crSearch").value.trim(),res=qs("crResults");qs("crRecord").innerHTML="";
+  if(!q){res.innerHTML="Kuch likho pehle.";return}
+  if(!window.CLINIC_ORG_ID){res.innerHTML="Pehle login karo.";return}
+  res.innerHTML="Dhoond raha hoon...";
+  try{
+    const {data,error}=await sb.from('patients').select('id,full_name,phone,age,gender,emr_number').eq('organization_id',window.CLINIC_ORG_ID).or('phone.ilike.%'+q+'%,full_name.ilike.%'+q+'%').limit(6);
+    if(error)throw error;
+    const rows=data||[];
+    res.innerHTML=rows.length?rows.map(p=>'<button class="light" style="margin:3px;padding:6px 12px" onclick="crLoad(\''+p.id+'\',\''+escapeHtml(p.full_name).replace(/\'/g,"")+'\')">'+escapeHtml(p.full_name)+' ('+escapeHtml(p.phone||"--")+')</button>').join(""):"Koi patient nahi mila.";
+  }catch(e){res.innerHTML="Error: "+e.message}
+}
+async function crLoad(pid,pname){
+  const box=qs("crRecord");box.innerHTML="Record load ho raha hai...";
+  try{
+    const [vs,rx,vt,lb,fu]=await Promise.all([
+      sb.from('visits').select('id,chief_complaint,visit_mode,status,created_at').eq('patient_id',pid).order('created_at',{ascending:false}).limit(15),
+      sb.from('prescriptions').select('diagnosis,investigations,advice,created_at,prescription_items(medicine_name,dosage,frequency,duration)').eq('patient_id',pid).order('created_at',{ascending:false}).limit(10),
+      sb.from('vitals').select('bp,pulse,temperature,spo2,weight,is_abnormal,created_at').eq('patient_id',pid).order('created_at',{ascending:false}).limit(10),
+      sb.from('lab_queue').select('test_name,status,result,created_at').eq('patient_id',pid).order('created_at',{ascending:false}).limit(15),
+      sb.from('followups').select('due_date,reason,status').eq('patient_id',pid).order('due_date',{ascending:false}).limit(5)
+    ]);
+    const d=x=>new Date(x).toLocaleDateString();
+    let h='<h3 style="margin:8px 0">'+escapeHtml(pname)+'</h3>';
+    h+='<div class="list-item"><strong>🩺 Prescriptions ('+(rx.data||[]).length+')</strong><br>'+((rx.data||[]).map(r=>'<small><strong>'+d(r.created_at)+':</strong> '+escapeHtml(r.diagnosis||"--")+'<br>💊 '+((r.prescription_items||[]).map(m=>escapeHtml(m.medicine_name)+' '+escapeHtml(m.dosage||"")+' '+escapeHtml(m.frequency||"")).join(", ")||"--")+(r.investigations?'<br>🔬 '+escapeHtml(r.investigations):'')+'</small>').join('<hr style="margin:4px 0">')||"Koi nahi")+'</div>';
+    h+='<div class="list-item"><strong>❤️ Vitals ('+(vt.data||[]).length+')</strong><br>'+((vt.data||[]).map(v=>'<small>'+d(v.created_at)+': BP '+escapeHtml(v.bp||"--")+' | Pulse '+(v.pulse||"--")+' | Temp '+(v.temperature||"--")+' | SpO2 '+(v.spo2||"--")+(v.is_abnormal?' <span class="pill" style="background:#fee2e2;color:#991b1b">Abnormal</span>':'')+'</small>').join('<br>')||"Koi nahi")+'</div>';
+    h+='<div class="list-item"><strong>🔬 Lab Tests ('+(lb.data||[]).length+')</strong><br>'+((lb.data||[]).map(l=>'<small>'+d(l.created_at)+': '+escapeHtml(l.test_name)+' — '+escapeHtml(l.status)+(l.result?' | <strong>'+escapeHtml(l.result)+'</strong>':'')+'</small>').join('<br>')||"Koi nahi")+'</div>';
+    h+='<div class="list-item"><strong>📋 Visits ('+(vs.data||[]).length+')</strong><br>'+((vs.data||[]).map(v=>'<small>'+d(v.created_at)+': '+escapeHtml(v.chief_complaint||"--")+' ('+escapeHtml(v.status)+')</small>').join('<br>')||"Koi nahi")+'</div>';
+    h+='<div class="list-item"><strong>📅 Follow-ups</strong><br>'+((fu.data||[]).map(f=>'<small>'+f.due_date+': '+escapeHtml(f.reason||"--")+' — '+escapeHtml(f.status)+'</small>').join('<br>')||"Koi nahi")+'</div>';
+    box.innerHTML=h;
+  }catch(e){box.innerHTML="Error: "+e.message}
+}
+</script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">📅 Follow-ups</h2>
 <div class="card" id="followupsCard">
 <h2>Aaj Ke Follow-ups <span class="pill blue">WhatsApp Yaad-dehani</span></h2>
@@ -928,7 +973,8 @@ const ROLE_SECTION_MAP = {
   'Aaj Ki Token Queue': ['receptionist','vitals_staff','nurse','doctor'],
   'Pharmacy & Lab Queues': ['pharmacist','lab_technician','doctor'],
   'Aaj Ka Hisaab': ['billing','receptionist'],
-  'Aaj Ke Follow-ups': ['receptionist','doctor']
+  'Aaj Ke Follow-ups': ['receptionist','doctor'],
+  'Patient Ki Poori History': ['doctor','receptionist']
 };
 const ROLE_VIEW_ALWAYS_FULL = ['org_owner','branch_admin','super_admin'];
 function applyRoleBasedView(){
