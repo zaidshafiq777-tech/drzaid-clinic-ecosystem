@@ -614,6 +614,56 @@ async function cloudSetTokenStatus(id,status){
 }
 window.addEventListener("load",()=>{setTimeout(()=>{try{if(window.CLINIC_ORG_ID)cloudLoadTokenBoard()}catch(e){}},2500)});
 </script>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">🎫 Live Queue Board</h2>
+<div class="card" id="queueBoardCard">
+<h2>Aaj Ki Token Queue <span class="pill green">Reception → Vitals → Doctor → Complete</span></h2>
+<div style="margin:8px 0"><button class="success" onclick="loadQueueBoard()">🔄 Refresh Queue</button> <span id="queueBoardStatus" style="font-size:12px;color:#64748b"></span></div>
+<div id="queueBoardList" style="max-height:420px;overflow:auto">Login karke Refresh dabao.</div>
+</div>
+<script>
+const QB_NEXT={registered:{label:"🩺 Vitals Lo",action:"vitals"},waiting_vitals:{label:"🩺 Vitals Lo",action:"vitals"},vitals_done:{label:"👨‍⚕️ Doctor Ke Paas",status:"with_doctor"},waiting_doctor:{label:"👨‍⚕️ Doctor Ke Paas",status:"with_doctor"},with_doctor:{label:"✅ Doctor Done",status:"doctor_done"},doctor_done:{label:"🏁 Complete",status:"completed"},sent_to_pharmacy:{label:"🏁 Complete",status:"completed"},sent_to_lab:{label:"🏁 Complete",status:"completed"},billing_pending:{label:"🏁 Complete",status:"completed"}};
+async function loadQueueBoard(){
+  const st=qs("queueBoardStatus"),list=qs("queueBoardList");
+  try{
+    if(!window.CLINIC_ORG_ID){st.textContent="Pehle login karo.";return}
+    st.textContent="Loading...";
+    const today=new Date();today.setHours(0,0,0,0);
+    const {data:tokens,error}=await sb.from('tokens').select('id,token_number,status,payment_status,payment_method,fee,visit_id,patient_id,priority,patients(full_name,age),visits(chief_complaint)').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()).not('status','in','("completed","cancelled","no_show")').order('token_number');
+    if(error)throw error;
+    const rows=tokens||[];
+    list.innerHTML=rows.length?rows.map(t=>{
+      const nx=QB_NEXT[t.status];
+      const payBadge=t.payment_status==='paid'?'<span class="pill green">Paid Rs.'+(t.fee||0)+'</span>':'<span class="pill" style="background:#fef3c7;color:#92400e">'+escapeHtml(t.payment_status)+' Rs.'+(t.fee||0)+'</span>';
+      let btns='';
+      if(nx){btns=nx.action==='vitals'?'<button class="light" style="padding:4px 10px;font-size:12.5px" onclick="qbShowVitals(\''+t.id+'\',\''+t.visit_id+'\',\''+t.patient_id+'\')">'+nx.label+'</button>':'<button class="success" style="padding:4px 10px;font-size:12.5px" onclick="qbSetStatus(\''+t.id+'\',\''+nx.status+'\')">'+nx.label+'</button>'}
+      btns+=' <button class="warning" style="padding:4px 8px;font-size:11.5px" onclick="qbSetStatus(\''+t.id+'\',\'cancelled\')">✖</button>';
+      return '<div class="list-item"'+(t.priority!=='normal'?' style="border-left:4px solid #dc2626"':'')+'><strong style="font-size:17px">#'+t.token_number+'</strong> <strong>'+escapeHtml(t.patients?.full_name||"--")+'</strong>'+(t.patients?.age?' ('+t.patients.age+')':'')+' '+payBadge+'<br><small>'+escapeHtml(t.visits?.chief_complaint||"--")+' | Status: <strong>'+escapeHtml(t.status)+'</strong></small><br>'+btns+'<div id="qbVitals_'+t.id+'" style="display:none;margin-top:6px;background:#f1f5f9;border-radius:8px;padding:8px"><input id="qv_bp_'+t.id+'" placeholder="BP (120/80)" style="width:90px;padding:5px;margin:2px"><input id="qv_pulse_'+t.id+'" placeholder="Pulse" style="width:60px;padding:5px;margin:2px"><input id="qv_temp_'+t.id+'" placeholder="Temp °F" style="width:70px;padding:5px;margin:2px"><input id="qv_spo2_'+t.id+'" placeholder="SpO2" style="width:60px;padding:5px;margin:2px"><input id="qv_wt_'+t.id+'" placeholder="Wzn kg" style="width:65px;padding:5px;margin:2px"><button class="success" style="padding:5px 10px;font-size:12px" onclick="qbSaveVitals(\''+t.id+'\',\''+t.visit_id+'\',\''+t.patient_id+'\')">💾 Save Vitals</button></div></div>';
+    }).join(""):"Aaj koi active token nahi.";
+    st.textContent="Active tokens: "+rows.length+" | "+new Date().toLocaleTimeString();
+  }catch(e){st.textContent="Error: "+e.message}
+}
+function qbShowVitals(tid){const d=qs("qbVitals_"+tid);if(d)d.style.display=d.style.display==="none"?"block":"none"}
+async function qbSetStatus(tid,status){
+  try{const {error}=await sb.from('tokens').update({status}).eq('id',tid);if(error)throw error;loadQueueBoard()}catch(e){alert("Update fail: "+e.message)}
+}
+async function qbSaveVitals(tid,vid,pid){
+  try{
+    const g=s=>qs("qv_"+s+"_"+tid)?.value.trim()||"";
+    const bp=g("bp"),pulse=parseInt(g("pulse"))||null,temp=parseFloat(g("temp"))||null,spo2=parseInt(g("spo2"))||null,wt=parseFloat(g("wt"))||null;
+    let abnormal=false;
+    if(pulse&&(pulse>120||pulse<50))abnormal=true;
+    if(temp&&((temp>90&&temp>=100.4)||(temp<=90&&temp>=38)))abnormal=true;
+    if(spo2&&spo2<94)abnormal=true;
+    if(bp){const sys=parseInt(bp.split("/")[0]);if(sys&&(sys>=160||sys<=90))abnormal=true}
+    const {error}=await sb.from('vitals').insert({organization_id:window.CLINIC_ORG_ID,visit_id:vid,patient_id:pid,bp:bp||null,pulse,temperature:temp,spo2,weight:wt,is_abnormal:abnormal,recorded_by:window.CLINIC_SESSION.user?.id||null});
+    if(error)throw error;
+    await sb.from('tokens').update({status:'vitals_done'}).eq('id',tid);
+    if(abnormal)alert("⚠️ ABNORMAL VITALS — Doctor ko turant batao!");
+    loadQueueBoard();
+  }catch(e){alert("Vitals save fail: "+e.message)}
+}
+
+</script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">☁ Cloud Queues (Agentic)</h2>
 
 <div class="card" id="cloudQueuesCard">
@@ -816,7 +866,11 @@ const ROLE_SECTION_MAP = {
   'Payment / Fee Status': ['receptionist','billing'],
   'Vitals Screening': ['vitals_staff','nurse'],
   'Billing Summary': ['billing'],
-  'Live Clinic Timeline (All Patients Today)': ['receptionist','doctor']
+  'Live Clinic Timeline (All Patients Today)': ['receptionist','doctor'],
+  'Patient Intake Agent': ['receptionist'],
+  'Aaj Ki Token Queue': ['receptionist','vitals_staff','nurse','doctor'],
+  'Pharmacy & Lab Queues': ['pharmacist','lab_technician','doctor'],
+  'Aaj Ka Hisaab': ['billing','receptionist']
 };
 const ROLE_VIEW_ALWAYS_FULL = ['org_owner','branch_admin','super_admin'];
 function applyRoleBasedView(){
@@ -835,6 +889,8 @@ function applyRoleBasedView(){
       }
     }
   });
+  const lb=document.getElementById('logoutBtnFixed');
+  if(lb&&window.CLINIC_SESSION.profile)lb.textContent=(window.CLINIC_SESSION.profile.full_name||'')+' ('+role+') | Logout';
   const toggleBtn = document.getElementById('viewToggleBtn');
   if(toggleBtn){
     toggleBtn.style.display = ROLE_VIEW_ALWAYS_FULL.includes(role) ? 'none' : 'block';
