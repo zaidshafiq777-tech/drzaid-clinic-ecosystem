@@ -583,6 +583,37 @@ async function agiAnswer(val,label){
 }
 window.addEventListener("load",()=>{setTimeout(()=>{try{agiStart()}catch(e){}},1200)});
 </script>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">🎫 Aaj Ki Token Queue (Live)</h2>
+<div class="card" id="tokenBoardCard">
+<h2>Doctor / Reception Queue Board <span class="pill blue">Cloud Live</span></h2>
+<div style="margin:8px 0"><button class="success" onclick="cloudLoadTokenBoard()">🔄 Refresh Queue</button> <span id="tokenBoardStatus" style="font-size:12px;color:#64748b"></span></div>
+<div id="tokenBoardList">Login karke Refresh dabao.</div>
+</div>
+<script>
+const TB_FLOW={registered:[["waiting_vitals","🩺 Vitals Bhejo"],["with_doctor","👨‍⚕️ Doctor Ke Paas"],["no_show","🚫 Nahi Aaya"]],waiting_vitals:[["vitals_done","✅ Vitals Done"]],vitals_done:[["with_doctor","👨‍⚕️ Doctor Ke Paas"]],waiting_doctor:[["with_doctor","👨‍⚕️ Doctor Ke Paas"]],with_doctor:[["doctor_done","✅ Doctor Done"]],doctor_done:[["completed","🏁 Complete"]],sent_to_pharmacy:[["completed","🏁 Complete"]],sent_to_lab:[["completed","🏁 Complete"]],billing_pending:[["completed","🏁 Complete"]]};
+const TB_LABEL={registered:"Registered",waiting_vitals:"Vitals Ka Intezar",vitals_done:"Vitals Done",waiting_doctor:"Doctor Ka Intezar",with_doctor:"Doctor Ke Paas",doctor_done:"Doctor Done",sent_to_pharmacy:"Pharmacy",sent_to_lab:"Lab",billing_pending:"Billing Baqi",completed:"Complete",cancelled:"Cancel",no_show:"No Show"};
+async function cloudLoadTokenBoard(){
+ const st=qs("tokenBoardStatus"),list=qs("tokenBoardList");
+ try{
+  if(!window.CLINIC_ORG_ID){if(st)st.textContent="Pehle login karo.";return}
+  if(st)st.textContent="Loading...";
+  const today=new Date();today.setHours(0,0,0,0);
+  const {data:toks,error}=await sb.from("tokens").select("*, patients(full_name,phone), visits(chief_complaint)").eq("organization_id",window.CLINIC_ORG_ID).gte("created_at",today.toISOString()).not("status","in",'("completed","cancelled","no_show")').order("token_number",{ascending:true}).limit(100);
+  if(error)throw error;
+  if(!toks||!toks.length){list.innerHTML="Aaj koi pending token nahi.";if(st)st.textContent="Updated "+new Date().toLocaleTimeString();return}
+  list.innerHTML=toks.map(t=>{
+   const acts=(TB_FLOW[t.status]||[]).map(a=>'<button class="'+(a[0]==="no_show"?"warning":"success")+'" style="padding:4px 10px;font-size:12px;margin:2px" onclick="cloudSetTokenStatus(\''+t.id+'\',\''+a[0]+'\')">'+a[1]+'</button>').join("");
+   const pay=t.payment_status==="paid"?'<span class="pill green">✅ Paid</span>':'<span class="pill" style="background:#fef3c7;color:#92400e">🕐 '+escapeHtml(t.payment_status)+'</span>';
+   return '<div class="list-item" style="border-left:4px solid '+(t.status==="with_doctor"?"#0ea5e9":"#94a3b8")+'"><strong style="font-size:18px">🎫 #'+t.token_number+'</strong> <strong>'+escapeHtml(t.patients?.full_name||"--")+'</strong> '+pay+'<br><small>'+escapeHtml(t.visits?.chief_complaint||"")+' | Status: <strong>'+(TB_LABEL[t.status]||t.status)+'</strong></small><br>'+acts+'</div>';
+  }).join("");
+  if(st)st.textContent="Updated "+new Date().toLocaleTimeString()+" | "+toks.length+" token(s) pending";
+ }catch(e){if(st)st.textContent="Error: "+e.message}
+}
+async function cloudSetTokenStatus(id,status){
+ try{const {error}=await sb.from("tokens").update({status}).eq("id",id);if(error)throw error;cloudLoadTokenBoard()}catch(e){alert("Update fail: "+e.message)}
+}
+window.addEventListener("load",()=>{setTimeout(()=>{try{if(window.CLINIC_ORG_ID)cloudLoadTokenBoard()}catch(e){}},2500)});
+</script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">☁ Cloud Queues (Agentic)</h2>
 
 <div class="card" id="cloudQueuesCard">
