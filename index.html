@@ -698,6 +698,82 @@ async function qbSaveVitals(tid,vid,pid){
 }
 
 </script>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">👨‍⚕️ Doctor Desk (Cloud)</h2>
+<div class="card" id="doctorDeskCard">
+<h2>Mere Paas Waiting Patients <span class="pill green">Note → AI Draft → Approve → Auto-Route</span></h2>
+<div style="margin:8px 0"><button class="success" onclick="loadDoctorDesk()">🔄 Refresh</button> <span id="ddStatus" style="font-size:12px;color:#64748b"></span></div>
+<div id="ddList" style="max-height:220px;overflow:auto">Login karke Refresh dabao.</div>
+<div id="ddPanel" style="display:none;margin-top:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px">
+<div id="ddSummary"></div>
+<textarea id="ddNote" rows="3" style="width:100%;box-sizing:border-box;margin-top:8px" placeholder="Rough note likho (Roman Urdu/English)... jaise: bukhar 3 din, gala kharab, panadol tds 5 din, cbc karwao, 3 din baad ana"></textarea>
+<div style="margin-top:6px">
+<button class="light" onclick="ddDraft()">🤖 AI Draft Banao</button>
+<button class="success" id="ddApproveBtn" style="display:none" onclick="ddApprove()">✅ Approve & Auto-Route</button>
+<span id="ddPanelStatus" style="font-size:12px;color:#64748b"></span>
+</div>
+<div id="ddDraftView" style="margin-top:8px"></div>
+</div>
+</div>
+<script>
+window.DD_SEL=null;window.DD_DRAFT=null;
+async function loadDoctorDesk(){
+  const st=qs("ddStatus"),list=qs("ddList");
+  try{
+    if(!window.CLINIC_ORG_ID){st.textContent="Pehle login karo.";return}
+    st.textContent="Loading...";
+    const today=new Date();today.setHours(0,0,0,0);
+    const {data,error}=await sb.from('tokens').select('id,token_number,status,visit_id,patient_id,patients(full_name,age,gender),visits(chief_complaint)').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()).in('status',['vitals_done','waiting_doctor','with_doctor']).order('token_number');
+    if(error)throw error;
+    const rows=data||[];window.DD_ROWS={};rows.forEach(r=>DD_ROWS[r.id]=r);
+    list.innerHTML=rows.length?rows.map(t=>'<div class="list-item"><strong>#'+t.token_number+' '+escapeHtml(t.patients?.full_name||"--")+'</strong>'+(t.patients?.age?' ('+t.patients.age+')':'')+' — '+escapeHtml(t.visits?.chief_complaint||"")+'<br><button class="success" style="padding:4px 10px;font-size:12.5px" onclick="ddSelect(\''+t.id+'\')">👨‍⚕️ Dekho</button></div>').join(""):"Koi waiting patient nahi.";
+    st.textContent="Waiting: "+rows.length;
+  }catch(e){st.textContent="Error: "+e.message}
+}
+async function ddSelect(tid){
+  const t=window.DD_ROWS&&DD_ROWS[tid];if(!t)return;
+  window.DD_SEL=t;window.DD_DRAFT=null;qs("ddDraftView").innerHTML="";qs("ddApproveBtn").style.display="none";qs("ddNote").value="";
+  qs("ddPanel").style.display="block";
+  let vitHtml="";
+  try{
+    const {data:v}=await sb.from('vitals').select('*').eq('visit_id',t.visit_id).order('created_at',{ascending:false}).limit(1);
+    if(v&&v.length){const x=v[0];vitHtml='<small>🩺 BP: '+escapeHtml(x.bp||"--")+' | Pulse: '+(x.pulse||"--")+' | Temp: '+(x.temperature||"--")+' | SpO2: '+(x.spo2||"--")+(x.is_abnormal?' <span class="pill" style="background:#fee2e2;color:#991b1b">⚠️ ABNORMAL</span>':'')+'</small>'}
+  }catch(e){}
+  if(t.status!=='with_doctor'){try{await sb.from('tokens').update({status:'with_doctor'}).eq('id',t.id)}catch(e){}}
+  qs("ddSummary").innerHTML='<strong style="font-size:17px">#'+t.token_number+' '+escapeHtml(t.patients?.full_name||"")+'</strong>'+(t.patients?.age?' | '+t.patients.age+' saal':'')+(t.patients?.gender?' | '+escapeHtml(t.patients.gender):'')+'<br><small>Shikayat: '+escapeHtml(t.visits?.chief_complaint||"--")+'</small><br>'+vitHtml;
+}
+async function ddDraft(){
+  const st=qs("ddPanelStatus");const note=qs("ddNote").value.trim();const t=window.DD_SEL;
+  if(!t){alert("Pehle patient select karo.");return}
+  if(!note){alert("Pehle rough note likho.");return}
+  st.textContent="🧠 AI draft bana raha hai...";
+  try{
+    const prompt='You are a clinical scribe assistant for a Pakistani GP clinic. Convert the doctor rough note (Roman Urdu/Urdu/English) into a structured prescription DRAFT. This is a suggestion only; the doctor will review. Return ONLY valid JSON, no markdown: {"diagnosis":"short diagnosis","medicines":[{"name":"","dosage":"","frequency":"OD/BD/TDS","duration":""}],"investigations":["test names"],"advice":"short advice in Roman Urdu","follow_up_days":3}. Patient: '+(t.patients?.full_name||"")+', age '+(t.patients?.age||"?")+', '+(t.patients?.gender||"")+'. Complaint: '+(t.visits?.chief_complaint||"")+'. Doctor note: '+note;
+    let out=await callSelectedAI(prompt,{json:true,maxOutputTokens:900,temperature:0});
+    out=String(out).replace(/```json|```/g,"").trim();
+    const d=JSON.parse(out);window.DD_DRAFT=d;
+    qs("ddDraftView").innerHTML='<div class="list-item" style="border-left:4px solid #0ea5e9"><strong>Draft (AI suggestion — approve se pehle check karein):</strong><br><strong>Dx:</strong> '+escapeHtml(d.diagnosis||"--")+'<br><strong>Rx:</strong> '+((d.medicines||[]).map(m=>escapeHtml([m.name,m.dosage,m.frequency,m.duration].filter(Boolean).join(" "))).join("; ")||"--")+'<br><strong>Tests:</strong> '+((d.investigations||[]).map(escapeHtml).join(", ")||"--")+'<br><strong>Advice:</strong> '+escapeHtml(d.advice||"--")+'<br><strong>Follow-up:</strong> '+(d.follow_up_days||0)+' din</div>';
+    qs("ddApproveBtn").style.display="inline-block";st.textContent="Draft tayyar — check kar ke Approve karo (ya note badal kar dobara draft banao).";
+  }catch(e){st.textContent="";alert("Draft fail: "+(e.message||e))}
+}
+async function ddApprove(){
+  const st=qs("ddPanelStatus");const t=window.DD_SEL,d=window.DD_DRAFT;
+  if(!t||!d){alert("Pehle draft banao.");return}
+  st.textContent="Saving & routing...";
+  try{
+    const {data:rx,error}=await sb.from('prescriptions').insert({organization_id:window.CLINIC_ORG_ID,visit_id:t.visit_id,patient_id:t.patient_id,diagnosis:d.diagnosis||null,investigations:(d.investigations||[]).join(", ")||null,advice:d.advice||null}).select('id').single();
+    if(error)throw error;
+    const meds=(d.medicines||[]).filter(m=>m.name).map(m=>({prescription_id:rx.id,medicine_name:m.name,dosage:m.dosage||null,frequency:m.frequency||null,duration:m.duration||null}));
+    if(meds.length)await sb.from('prescription_items').insert(meds);
+    const resp=await fetch("https://drzaid.app.n8n.cloud/webhook/prescription-approved",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prescriptionId:rx.id})});
+    const r=await resp.json().catch(()=>({}));
+    if(d.follow_up_days&&d.follow_up_days>0){const due=new Date();due.setDate(due.getDate()+d.follow_up_days);await sb.from('followups').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,due_date:due.toISOString().slice(0,10),reason:d.diagnosis||t.visits?.chief_complaint||null,status:'pending'})}
+    await sb.from('tokens').update({status:'doctor_done'}).eq('id',t.id);
+    st.textContent="";qs("ddApproveBtn").style.display="none";
+    qs("ddDraftView").innerHTML='<div class="list-item" style="border-left:4px solid #059669"><strong>✅ Approved & Routed:</strong> '+escapeHtml(r.message||"pharmacy/lab queues update ho gaye")+'</div>';
+    loadDoctorDesk();if(typeof loadQueueBoard==='function')loadQueueBoard();if(typeof cloudLoadQueues==='function')cloudLoadQueues();
+  }catch(e){st.textContent="";alert("Approve fail: "+(e.message||e))}
+}
+</script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">☁ Cloud Queues (Agentic)</h2>
 
 <div class="card" id="cloudQueuesCard">
