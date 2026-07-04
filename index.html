@@ -537,44 +537,54 @@ async function clinicLogout(){
 </div>
 </div>
 
-<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">🤖 Agentic Reception (1-Click)</h2>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">🤖 Agentic Reception (Conversational)</h2>
 <div class="card" id="agenticIntakeCard">
-<h2>Patient Intake Agent <span class="pill green">AI khud form bharega</span></h2>
-<div class="api-note">Reception sirf ek line likhe (ya bole) — jaise: <em>"Ali Ahmed 03001234567, 34 saal, mard, bukhar aur khansi 3 din se"</em> — agent khud naam, phone, umar, complaint nikalega, patient check karega, aur token bana dega. Koi box select nahi karna.</div>
-<textarea id="agenticIntakeInput" rows="2" style="width:100%;box-sizing:border-box" placeholder="Patient ki details ek hi line mein likho... (Roman Urdu / Urdu / English sab chalega)"></textarea>
-<div style="margin-top:8px">
-<button class="success" onclick="agenticReceptionIntake()" id="agenticIntakeBtn">🤖 Agent Chalao — Token Banao</button>
-<span id="agenticIntakeStatus" style="font-size:12.5px;color:#64748b;margin-left:8px"></span>
+<h2>Patient Intake Agent <span class="pill green">Agent khud sawal poochta hai</span></h2>
+<div id="agiChat" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px;max-height:340px;overflow:auto;font-size:14px"></div>
+<div id="agiOpts" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px"></div>
+<div id="agiInputRow" style="margin-top:8px;display:flex;gap:6px">
+<input id="agiInput" style="flex:1;padding:9px 10px;border:1px solid #cbd5e1;border-radius:8px" placeholder="Jawab yahan likho..." onkeydown="if(event.key==='Enter')agiSend()">
+<button class="success" onclick="agiSend()">Bhejo</button>
+<button class="light" onclick="agiStart()" title="Naya patient shuru karo">↺</button>
 </div>
-<div id="agenticIntakeResult" style="margin-top:10px"></div>
 </div>
 <script>
-async function agenticReceptionIntake(){
-  const raw=qs("agenticIntakeInput").value.trim();
-  const st=qs("agenticIntakeStatus"),res=qs("agenticIntakeResult"),btn=qs("agenticIntakeBtn");
-  if(!raw){alert("Pehle patient ki details likho.");return}
-  if(!window.CLINIC_ORG_ID){alert("Pehle login karo.");return}
-  btn.disabled=true;st.textContent="🧠 Agent samajh raha hai...";res.innerHTML="";
-  try{
-    const prompt='Extract patient intake info from this reception text (may be Roman Urdu, Urdu, or English). Return ONLY valid JSON, no markdown, exactly this shape: {"phone":"03xxxxxxxxx or empty","name":"full name","age":number or null,"gender":"male" or "female" or "","complaint":"chief complaint in English","visit_mode":"in_clinic"}. Text: '+raw;
-    let out=await callSelectedAI(prompt,{json:true,maxOutputTokens:400,temperature:0});
-    out=String(out).replace(/```json|```/g,"").trim();
-    const data=JSON.parse(out);
-    if(!data.phone&&!data.name)throw new Error("Agent ko naam ya phone nahi mila, thoda aur detail likho.");
-    st.textContent="📞 Patient check + token ban raha hai...";
-    const resp=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone:data.phone||"",name:data.name||"",age:data.age||null,gender:data.gender||"",complaint:data.complaint||raw,visit_mode:data.visit_mode||"in_clinic",source:"reception"})});
-    if(!resp.ok)throw new Error("Intake agent error: "+resp.status);
-    const r=await resp.json();
-    st.textContent="";btn.disabled=false;
-    res.innerHTML='<div class="list-item" style="border-left:4px solid #059669"><strong style="font-size:20px">🎫 Token #'+escapeHtml(String(r.tokenNumber))+'</strong><br><strong>'+escapeHtml(data.name||"")+'</strong> | '+escapeHtml(data.phone||"")+' | '+escapeHtml(data.complaint||"")+'<br><small>Patient/visit/token cloud mein ban gaye. Queue mein shamil.</small></div>';
-    qs("agenticIntakeInput").value="";
-  }catch(e){
-    btn.disabled=false;st.textContent="";
-    res.innerHTML='<div class="list-item" style="border-left:4px solid #dc2626">❌ '+escapeHtml(e.message||String(e))+'</div>';
-  }
+let AGI={step:null,data:{},found:[]};
+function agiBubble(t,who){const c=qs("agiChat");const d=document.createElement("div");d.style.cssText="margin:6px 0;display:flex;justify-content:"+(who==="user"?"flex-end":"flex-start");d.innerHTML='<div style="max-width:85%;padding:8px 12px;border-radius:12px;background:'+(who==="user"?"#0ea5e9;color:#fff":"#fff;border:1px solid #e2e8f0")+'">'+t+"</div>";c.appendChild(d);c.scrollTop=c.scrollHeight}
+function agiAsk(t,opts){agiBubble(t,"agent");const o=qs("agiOpts");o.innerHTML="";(opts||[]).forEach(op=>{const b=document.createElement("button");b.className="light";b.style.cssText="padding:6px 12px;font-size:13px";b.textContent=op.label;b.onclick=()=>agiAnswer(op.value,op.label);o.appendChild(b)});qs("agiInput").style.display=(opts&&opts.length&&!opts.some(o=>o.allowText))?"none":"block"}
+function agiSend(){const v=qs("agiInput").value.trim();if(!v)return;qs("agiInput").value="";agiAnswer(v,v)}
+function agiStart(){if(!window.CLINIC_ORG_ID){alert("Pehle login karo.");return}AGI={step:"phone",data:{},found:[]};qs("agiChat").innerHTML="";qs("agiOpts").innerHTML="";qs("agiInput").style.display="block";agiAsk("Assalam o Alaikum! 🌙 Main intake agent hoon. Patient ka <strong>mobile number</strong> batayein?")}
+async function agiAnswer(val,label){
+ agiBubble(escapeHtml(label),"user");qs("agiOpts").innerHTML="";
+ try{
+ switch(AGI.step){
+  case "phone":{const ph=String(val).replace(/[^0-9+]/g,"");if(ph.length<10){agiAsk("Ye number chhota lag raha hai — poora mobile number likhein (jaise 03001234567)");return}AGI.data.phone=ph;agiBubble("🔍 Record check kar raha hoon...","agent");
+   const {data:pats}=await sb.from("patients").select("id,full_name,age,gender").eq("organization_id",window.CLINIC_ORG_ID).eq("phone",ph).limit(5);
+   if(pats&&pats.length){AGI.found=pats;AGI.step="pick";const opts=pats.map((p,i)=>({label:"✔ "+p.full_name+(p.age?" ("+p.age+" saal)":""),value:"pick:"+i}));opts.push({label:"➕ Naya patient register karo",value:"new"});agiAsk("Is number pe ye record mila. <strong>Yehi patient hain</strong> ya kisi aur ko register karna hai?",opts)}
+   else{AGI.step="name";agiAsk("Naya patient lag raha hai. Patient ka <strong>poora naam</strong>?")}break}
+  case "pick":{if(String(val).startsWith("pick:")){const p=AGI.found[parseInt(val.split(":")[1])];AGI.data.name=p.full_name;AGI.data.age=p.age;AGI.data.gender=p.gender;AGI.data.existing=true;AGI.step="complaint";agiAsk("Theek hai, <strong>"+escapeHtml(p.full_name)+"</strong> ka record use hoga. Aaj <strong>kya masla/shikayat</strong> hai?")}else{AGI.step="name";agiAsk("Naye patient ka <strong>poora naam</strong>?")}break}
+  case "name":{AGI.data.name=val;AGI.step="age";agiAsk("<strong>Umar</strong> kitni hai? (saal mein)");break}
+  case "age":{const a=parseInt(String(val).replace(/[^0-9]/g,""));if(!a||a<0||a>120){agiAsk("Umar samajh nahi aayi — sirf number likhein (jaise 34)");return}AGI.data.age=a;AGI.step="gender";agiAsk("Patient <strong>mard hain ya khatoon</strong>?",[{label:"👨 Mard",value:"male"},{label:"👩 Khatoon",value:"female"}]);break}
+  case "gender":{AGI.data.gender=val;AGI.step="complaint";agiAsk("Aaj <strong>kya masla/shikayat</strong> hai? (jaise: bukhar 3 din se)");break}
+  case "complaint":{AGI.data.complaint=val;AGI.step="visit";agiAsk("Visit kaisi hogi?",[{label:"🏥 Clinic mein",value:"in_clinic"},{label:"💻 Online",value:"online"}]);break}
+  case "visit":{AGI.data.visit_mode=val;AGI.step="fee";agiAsk("<strong>Consultation fee</strong> kitni hai? (sirf raqam likhein)",[{label:"Rs. 500",value:"500"},{label:"Rs. 1000",value:"1000"},{label:"Rs. 1500",value:"1500",allowText:true}]);break}
+  case "fee":{const f=parseInt(String(val).replace(/[^0-9]/g,""));if(!f){agiAsk("Raqam samajh nahi aayi — sirf number likhein");return}AGI.data.fee=f;AGI.step="paymethod";agiAsk("Payment ka <strong>tareeqa</strong>?",[{label:"💵 Cash",value:"Cash"},{label:"📱 JazzCash",value:"JazzCash"},{label:"📱 EasyPaisa",value:"EasyPaisa"},{label:"💳 Card",value:"Card"},{label:"🕐 Udhaar (baad mein)",value:"Udhaar"}]);break}
+  case "paymethod":{AGI.data.method=val;if(val==="Udhaar"){AGI.data.payment_status="unpaid";AGI.step="create";agiAnswer("__go__","Udhaar note kar liya")}else{AGI.step="payconfirm";agiAsk("💰 <strong>Rs. "+AGI.data.fee+"</strong> "+escapeHtml(val)+" se <strong>receive ho gayi?</strong> (Token payment ke baad hi banega)",[{label:"✅ Haan, received",value:"yes"},{label:"❌ Cancel",value:"no"}])}break}
+  case "payconfirm":{if(val!=="yes"){agiAsk("Theek hai, token <strong>cancel</strong> — payment ke baghair token nahi banta. Naye patient ke liye ↺ dabayein.");AGI.step=null;return}AGI.data.payment_status="paid";AGI.step="create";agiAnswer("__go__","Payment confirm")}break;
+  case "create":{agiBubble("🎫 Token ban raha hai...","agent");
+   const resp=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone:AGI.data.phone,name:AGI.data.name,age:AGI.data.age||null,gender:AGI.data.gender||"",complaint:AGI.data.complaint,visit_mode:AGI.data.visit_mode,source:"reception",payment_status:AGI.data.payment_status})});
+   if(!resp.ok)throw new Error("Agent error "+resp.status);
+   const r=await resp.json();
+   agiAsk('<div style="border-left:4px solid #059669;padding-left:10px"><strong style="font-size:22px">🎫 Token #'+escapeHtml(String(r.tokenNumber))+'</strong><br>'+escapeHtml(AGI.data.name)+" | "+escapeHtml(AGI.data.complaint)+"<br>💰 Rs. "+AGI.data.fee+" — "+escapeHtml(AGI.data.method)+" ("+(AGI.data.payment_status==="paid"?"✅ Paid":"🕐 Udhaar")+')<br><small>Patient queue mein shamil ho gaya.</small></div>',[{label:"➕ Agla patient",value:"__restart__"}]);
+   AGI.step="done";break}
+  case "done":{if(val==="__restart__")agiStart();break}
+  default:agiStart();
+ }}catch(e){agiAsk("❌ Masla aa gaya: "+escapeHtml(e.message||String(e))+" — dobara try karein ya ↺ dabayein.")}
 }
+window.addEventListener("load",()=>{setTimeout(()=>{try{agiStart()}catch(e){}},1200)});
 </script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">☁ Cloud Queues (Agentic)</h2>
+
 <div class="card" id="cloudQueuesCard">
 <h2>Pharmacy & Lab Queues <span class="pill green">Auto-routed by AI Agents</span></h2>
 <div class="api-note">Ye queues n8n agents khud bharte hain jab doctor prescription approve karta hai. Pharmacist dispense kare, Lab technician complete kare.</div>
