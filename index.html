@@ -1060,29 +1060,47 @@ const ROLE_SECTION_MAP = {
   'Patient Ki Poori History': ['doctor','receptionist']
 };
 const ROLE_VIEW_ALWAYS_FULL = ['org_owner','branch_admin','super_admin'];
+const ROLE_ALLOWED_HEADINGS = {
+  pharmacist: ['Pharmacy & Lab Queues','Stock / Batches / Expiry'],
+  lab_technician: ['Pharmacy & Lab Queues'],
+  vitals_staff: ['Aaj Ki Token Queue','Vitals Screening'],
+  nurse: ['Aaj Ki Token Queue','Vitals Screening'],
+  receptionist: ['Patient Intake Agent','Aaj Ki Token Queue','Aaj Ka Hisaab','Aaj Ke Follow-ups','Reception Dashboard','Appointment Booking','Payment / Fee Status','Live Clinic Timeline (All Patients Today)'],
+  billing: ['Aaj Ka Hisaab','Billing Summary','Payment / Fee Status']
+};
 function applyRoleBasedView(){
   const role = window.CLINIC_SESSION && window.CLINIC_SESSION.profile ? window.CLINIC_SESSION.profile.role : null;
   if(!role) return;
-  const showAll = localStorage.getItem('clinicViewShowAll')==='true';
-  document.querySelectorAll('h2').forEach(h2=>{
-    const text = (h2.textContent||'').trim();
-    for(const key in ROLE_SECTION_MAP){
-      if(text.indexOf(key)!==-1){
-        const allowedRoles = ROLE_SECTION_MAP[key];
-        const card = h2.closest('.card') || h2.parentElement;
-        if(!card) return;
-        const shouldHide = !ROLE_VIEW_ALWAYS_FULL.includes(role) && !allowedRoles.includes(role) && !showAll;
-        card.style.display = shouldHide ? 'none' : '';
-      }
-    }
-  });
   const lb=document.getElementById('logoutBtnFixed');
   if(lb&&window.CLINIC_SESSION.profile)lb.textContent=(window.CLINIC_SESSION.profile.full_name||'')+' ('+role+') | Logout';
+  if(ROLE_VIEW_ALWAYS_FULL.includes(role)||role==='doctor')return; // full view roles
+  const allowed = ROLE_ALLOWED_HEADINGS[role];
+  if(!allowed||!allowed.length)return; // unknown role -> full view (safe default)
+  // Hide EVERYTHING first (allowlist approach)
+  Array.from(document.body.children).forEach(el=>{
+    if(el.id==='authGateOverlay'||el.id==='logoutBtnFixed')return;
+    if(el.tagName==='SCRIPT'||el.tagName==='STYLE')return;
+    el.style.display='none';
+  });
+  // Then unhide only allowed sections (card + uska heading + parent chain)
+  allowed.forEach(txt=>{
+    document.querySelectorAll('h2,h3').forEach(h=>{
+      if((h.textContent||'').indexOf(txt)!==-1){
+        const card=h.closest('.card')||h.parentElement;
+        if(!card)return;
+        let n=card;while(n&&n!==document.body){n.style.display='';n=n.parentElement}
+        const prev=card.previousElementSibling;
+        if(prev&&prev.tagName==='H2')prev.style.display='';
+      }
+    });
+  });
+  // Queue columns: pharmacist ko lab column nahi, lab ko pharmacy column nahi
+  try{
+    if(role==='pharmacist'&&qs('cloudLabList'))qs('cloudLabList').parentElement.style.display='none';
+    if(role==='lab_technician'&&qs('cloudPharmacyList'))qs('cloudPharmacyList').parentElement.style.display='none';
+  }catch(e){}
   const toggleBtn = document.getElementById('viewToggleBtn');
-  if(toggleBtn){
-    toggleBtn.style.display = ROLE_VIEW_ALWAYS_FULL.includes(role) ? 'none' : 'block';
-    toggleBtn.textContent = showAll ? '🔽 Simple View' : '🔼 Show All Sections';
-  }
+  if(toggleBtn)toggleBtn.style.display='none';
 }
 function toggleFullView(){
   const cur = localStorage.getItem('clinicViewShowAll')==='true';
