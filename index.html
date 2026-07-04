@@ -1069,38 +1069,41 @@ const ROLE_ALLOWED_HEADINGS = {
   billing: ['Aaj Ka Hisaab','Billing Summary','Payment / Fee Status']
 };
 function applyRoleBasedView(){
+ try{
   const role = window.CLINIC_SESSION && window.CLINIC_SESSION.profile ? window.CLINIC_SESSION.profile.role : null;
   if(!role) return;
   const lb=document.getElementById('logoutBtnFixed');
   if(lb&&window.CLINIC_SESSION.profile)lb.textContent=(window.CLINIC_SESSION.profile.full_name||'')+' ('+role+') | Logout';
-  if(ROLE_VIEW_ALWAYS_FULL.includes(role)||role==='doctor')return; // full view roles
+  if(ROLE_VIEW_ALWAYS_FULL.includes(role)||role==='doctor')return;
   const allowed = ROLE_ALLOWED_HEADINGS[role];
-  if(!allowed||!allowed.length)return; // unknown role -> full view (safe default)
-  // Hide EVERYTHING first (allowlist approach)
-  Array.from(document.body.children).forEach(el=>{
-    if(el.id==='authGateOverlay'||el.id==='logoutBtnFixed')return;
-    if(el.tagName==='SCRIPT'||el.tagName==='STYLE')return;
-    el.style.display='none';
+  if(!allowed||!allowed.length)return;
+  const cards=Array.from(document.querySelectorAll('.card'));
+  let shownCount=0;
+  cards.forEach(card=>{
+    const txt=(card.textContent||'');
+    const ok=allowed.some(a=>txt.indexOf(a)!==-1);
+    card.style.display=ok?'':'none';
+    const prev=card.previousElementSibling;
+    if(prev&&prev.tagName==='H2')prev.style.display=ok?'':'none';
+    if(ok)shownCount++;
   });
-  // Then unhide only allowed sections (card + uska heading + parent chain)
-  allowed.forEach(txt=>{
-    document.querySelectorAll('h2,h3').forEach(h=>{
-      if((h.textContent||'').indexOf(txt)!==-1){
-        const card=h.closest('.card')||h.parentElement;
-        if(!card)return;
-        let n=card;while(n&&n!==document.body){n.style.display='';n=n.parentElement}
-        const prev=card.previousElementSibling;
-        if(prev&&prev.tagName==='H2')prev.style.display='';
-      }
-    });
-  });
-  // Queue columns: pharmacist ko lab column nahi, lab ko pharmacy column nahi
+  // Failsafe: agar kuch bhi match na ho to sab wapas dikha do (blank page kabhi nahi)
+  if(shownCount===0){cards.forEach(c=>{c.style.display='';const p=c.previousElementSibling;if(p&&p.tagName==='H2')p.style.display=''});return}
+  // Non-card page furniture jo staff ko nahi chahiye: standalone top H2s already handled; tabs etc legacy .card ke andar hain
   try{
     if(role==='pharmacist'&&qs('cloudLabList'))qs('cloudLabList').parentElement.style.display='none';
     if(role==='lab_technician'&&qs('cloudPharmacyList'))qs('cloudPharmacyList').parentElement.style.display='none';
   }catch(e){}
   const toggleBtn = document.getElementById('viewToggleBtn');
   if(toggleBtn)toggleBtn.style.display='none';
+  // Data khud load karo taake staff ko "Refresh dabao" na karna pade
+  try{
+    if(['pharmacist','lab_technician'].includes(role)&&typeof cloudLoadQueues==='function')cloudLoadQueues();
+    if(role==='pharmacist'&&typeof loadInventory==='function')loadInventory();
+    if(['receptionist','vitals_staff','nurse'].includes(role)&&typeof loadQueueBoard==='function')loadQueueBoard();
+    if(role==='receptionist'&&typeof loadFollowups==='function')loadFollowups();
+  }catch(e){}
+ }catch(e){console.warn('[RoleView]',e)}
 }
 function toggleFullView(){
   const cur = localStorage.getItem('clinicViewShowAll')==='true';
