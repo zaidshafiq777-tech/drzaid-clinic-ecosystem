@@ -700,7 +700,7 @@ async function cloudLoadQueues(){
       sb.from('lab_queue').select('*, patients(full_name)').eq('organization_id',window.CLINIC_ORG_ID).not('status','in','("completed","verified")').order('created_at',{ascending:true}).limit(50)
     ]);
     const phRows=ph.data||[],lbRows=lb.data||[];
-    qs("cloudPharmacyList").innerHTML=phRows.length?phRows.map(r=>`<div class="list-item"><strong>${escapeHtml(r.medicine_name)}</strong> ${escapeHtml(r.dosage||"")} ${escapeHtml(r.frequency||"")} ${escapeHtml(r.duration||"")}<br><small>Patient: ${escapeHtml(r.patients?.full_name||"--")} | Status: ${escapeHtml(r.status)}</small><br><button class="success" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('pharmacy_queue','${r.id}','dispensed')">✓ Dispensed</button> <button class="warning" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('pharmacy_queue','${r.id}','unavailable')">Stock Nahi</button></div>`).join(""):"Koi pending medicine nahi.";
+    window.PH_ROWS={};phRows.forEach(r=>PH_ROWS[r.id]=r);qs("cloudPharmacyList").innerHTML=phRows.length?phRows.map(r=>`<div class="list-item"><strong>${escapeHtml(r.medicine_name)}</strong> ${escapeHtml(r.dosage||"")} ${escapeHtml(r.frequency||"")} ${escapeHtml(r.duration||"")}<br><small>Patient: ${escapeHtml(r.patients?.full_name||"--")} | Status: ${escapeHtml(r.status)}</small><br><button class="success" style="padding:4px 8px;font-size:12px" onclick="qbDispense('${r.id}')">✓ Dispensed</button> <button class="warning" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('pharmacy_queue','${r.id}','unavailable')">Stock Nahi</button></div>`).join(""):"Koi pending medicine nahi.";
     qs("cloudLabList").innerHTML=lbRows.length?lbRows.map(r=>`<div class="list-item"><strong>${escapeHtml(r.test_name)}</strong><br><small>Patient: ${escapeHtml(r.patients?.full_name||"--")} | Status: ${escapeHtml(r.status)}</small><br><button class="light" style="padding:4px 8px;font-size:12px" onclick="cloudUpdateQueue('lab_queue','${r.id}','collected')">Sample Liya</button> <button class="success" style="padding:4px 8px;font-size:12px" onclick="qbLabComplete('${r.id}')">✓ Complete</button></div>`).join(""):"Koi pending test nahi.";
     if(st)st.textContent="Updated: "+new Date().toLocaleTimeString()+" | Pharmacy: "+phRows.length+" pending | Lab: "+lbRows.length+" pending";
   }catch(e){if(st)st.textContent="Error: "+e.message;console.warn('[CloudQueues]',e)}
@@ -719,6 +719,35 @@ async function qbLabComplete(id){
     if(error)throw error;
     cloudLoadQueues();
   }catch(e){alert("Update fail: "+e.message)}
+}
+async function qbDispense(id){
+  try{
+    const row=window.PH_ROWS&&PH_ROWS[id];if(!row){alert("Row nahi mili, refresh karo");return}
+    const qtyStr=prompt("Kitni quantity dispense ki? ("+(row.medicine_name||"")+")","10");
+    const qty=parseInt(qtyStr);if(!qty||qty<=0)return;
+    const {data:meds}=await sb.from('medicines').select('id,name').eq('organization_id',window.CLINIC_ORG_ID).ilike('name','%'+row.medicine_name.split(' ')[0]+'%').limit(1);
+    if(!meds||!meds.length){
+      if(!confirm("'"+row.medicine_name+"' inventory mein nahi mili. Bina stock kate dispense mark karein?"))return;
+    }else{
+      const medId=meds[0].id;
+      const {data:batches}=await sb.from('medicine_batches').select('*').eq('medicine_id',medId).gt('qty',0).order('expiry_date',{ascending:true});
+      let remaining=qty;const totalAvail=(batches||[]).reduce((s,b)=>s+b.qty,0);
+      if(totalAvail<qty){
+        if(!confirm("Stock kam hai! Sirf "+totalAvail+" available, "+qty+" chahiye. Phir bhi dispense mark karein?"))return;
+        remaining=totalAvail;
+      }
+      for(const b of (batches||[])){
+        if(remaining<=0)break;
+        const take=Math.min(b.qty,remaining);
+        await sb.from('medicine_batches').update({qty:b.qty-take}).eq('id',b.id);
+        await sb.from('stock_ledger').insert({organization_id:window.CLINIC_ORG_ID,medicine_id:medId,batch_id:b.id,change_qty:-take,reason:'dispensed',ref_id:id,created_by:window.CLINIC_SESSION.user?.id||null});
+        remaining-=take;
+      }
+    }
+    const {error}=await sb.from('pharmacy_queue').update({status:'dispensed'}).eq('id',id);
+    if(error)throw error;
+    cloudLoadQueues();if(typeof loadInventory==='function')loadInventory();
+  }catch(e){alert("Dispense fail: "+e.message)}
 }
 </script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">📊 Daily Report</h2>
@@ -802,6 +831,59 @@ async function crLoad(pid,pname){
     h+='<div class="list-item"><strong>📅 Follow-ups</strong><br>'+((fu.data||[]).map(f=>'<small>'+f.due_date+': '+escapeHtml(f.reason||"--")+' — '+escapeHtml(f.status)+'</small>').join('<br>')||"Koi nahi")+'</div>';
     box.innerHTML=h;
   }catch(e){box.innerHTML="Error: "+e.message}
+}
+</script>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">📦 Pharmacy Inventory</h2>
+<div class="card" id="inventoryCard">
+<h2>Stock / Batches / Expiry <span class="pill blue">FEFO Auto-Deduct</span></h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;margin:8px 0">
+<input id="invMedName" placeholder="Medicine naam (Panadol 500mg)" style="padding:7px">
+<input id="invBatchNo" placeholder="Batch # (optional)" style="padding:7px">
+<input id="invExpiry" type="date" style="padding:7px">
+<input id="invQty" type="number" placeholder="Qty" style="padding:7px">
+<input id="invSalePrice" type="number" placeholder="Sale price/unit" style="padding:7px">
+<button class="success" onclick="invAddStock()">➕ Stock Add Karo</button>
+</div>
+<div style="margin:8px 0"><button class="light" onclick="loadInventory()">🔄 Refresh Stock</button> <span id="invStatus" style="font-size:12px;color:#64748b"></span></div>
+<div id="invList" style="max-height:340px;overflow:auto">Login karke Refresh dabao.</div>
+</div>
+<script>
+async function invAddStock(){
+  try{
+    if(!window.CLINIC_ORG_ID){alert("Pehle login karo.");return}
+    const name=qs("invMedName").value.trim();const qty=parseInt(qs("invQty").value);
+    if(!name||!qty||qty<=0){alert("Medicine naam aur qty dono chahiye.");return}
+    let {data:med}=await sb.from('medicines').select('id').eq('organization_id',window.CLINIC_ORG_ID).ilike('name',name).maybeSingle();
+    if(!med){const {data:nm,error}=await sb.from('medicines').insert({organization_id:window.CLINIC_ORG_ID,name}).select('id').single();if(error)throw error;med=nm}
+    const {data:batch,error:bErr}=await sb.from('medicine_batches').insert({organization_id:window.CLINIC_ORG_ID,medicine_id:med.id,batch_no:qs("invBatchNo").value.trim()||null,expiry_date:qs("invExpiry").value||null,qty,sale_price:parseFloat(qs("invSalePrice").value)||0}).select('id').single();
+    if(bErr)throw bErr;
+    await sb.from('stock_ledger').insert({organization_id:window.CLINIC_ORG_ID,medicine_id:med.id,batch_id:batch.id,change_qty:qty,reason:'stock_in',created_by:window.CLINIC_SESSION.user?.id||null});
+    ["invMedName","invBatchNo","invExpiry","invQty","invSalePrice"].forEach(i=>qs(i).value="");
+    loadInventory();
+  }catch(e){alert("Stock add fail: "+e.message)}
+}
+async function loadInventory(){
+  const st=qs("invStatus"),list=qs("invList");
+  try{
+    if(!window.CLINIC_ORG_ID){st.textContent="Pehle login karo.";return}
+    st.textContent="Loading...";
+    const {data:batches,error}=await sb.from('medicine_batches').select('id,batch_no,expiry_date,qty,sale_price,medicines(id,name,reorder_level)').eq('organization_id',window.CLINIC_ORG_ID).order('expiry_date',{ascending:true});
+    if(error)throw error;
+    const byMed={};
+    (batches||[]).forEach(b=>{const mid=b.medicines?.id;if(!mid)return;if(!byMed[mid])byMed[mid]={name:b.medicines.name,reorder:b.medicines.reorder_level||10,total:0,batches:[]};byMed[mid].total+=b.qty;if(b.qty>0)byMed[mid].batches.push(b)});
+    const today=new Date();const soon=new Date();soon.setDate(soon.getDate()+60);
+    const meds=Object.values(byMed);
+    list.innerHTML=meds.length?meds.map(m=>{
+      const low=m.total<=m.reorder;
+      const batchHtml=m.batches.map(b=>{
+        const exp=b.expiry_date?new Date(b.expiry_date):null;
+        const expired=exp&&exp<today;const nearExp=exp&&!expired&&exp<=soon;
+        return '<small style="display:block;padding:2px 0 2px 12px'+(expired?';color:#dc2626;font-weight:700':nearExp?';color:#d97706;font-weight:600':'')+'">'+(b.batch_no?escapeHtml(b.batch_no)+' | ':'')+'Qty: '+b.qty+(b.expiry_date?' | Exp: '+escapeHtml(b.expiry_date)+(expired?' ⛔ EXPIRED':nearExp?' ⚠️ Qareeb':''):'')+(b.sale_price?' | Rs.'+b.sale_price:'')+'</small>';
+      }).join("");
+      return '<div class="list-item"'+(low?' style="border-left:4px solid #d97706"':'')+'><strong>'+escapeHtml(m.name)+'</strong> — Total: <strong>'+m.total+'</strong>'+(low?' <span class="pill" style="background:#fef3c7;color:#92400e">⚠️ LOW STOCK</span>':'')+batchHtml+'</div>';
+    }).join(""):"Inventory khaali hai — upar se stock add karo.";
+    st.textContent="Medicines: "+meds.length+" | "+new Date().toLocaleTimeString();
+  }catch(e){st.textContent="Error: "+e.message}
 }
 </script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">📅 Follow-ups</h2>
@@ -974,6 +1056,7 @@ const ROLE_SECTION_MAP = {
   'Pharmacy & Lab Queues': ['pharmacist','lab_technician','doctor'],
   'Aaj Ka Hisaab': ['billing','receptionist'],
   'Aaj Ke Follow-ups': ['receptionist','doctor'],
+  'Stock / Batches / Expiry': ['pharmacist'],
   'Patient Ki Poori History': ['doctor','receptionist']
 };
 const ROLE_VIEW_ALWAYS_FULL = ['org_owner','branch_admin','super_admin'];
