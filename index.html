@@ -572,7 +572,7 @@ async function agiAnswer(val,label){
   case "paymethod":{AGI.data.method=val;if(val==="Udhaar"){AGI.data.payment_status="unpaid";AGI.step="create";agiAnswer("__go__","Udhaar note kar liya")}else{AGI.step="payconfirm";agiAsk("💰 <strong>Rs. "+AGI.data.fee+"</strong> "+escapeHtml(val)+" se <strong>receive ho gayi?</strong> (Token payment ke baad hi banega)",[{label:"✅ Haan, received",value:"yes"},{label:"❌ Cancel",value:"no"}])}break}
   case "payconfirm":{if(val!=="yes"){agiAsk("Theek hai, token <strong>cancel</strong> — payment ke baghair token nahi banta. Naye patient ke liye ↺ dabayein.");AGI.step=null;return}AGI.data.payment_status="paid";AGI.step="create";agiAnswer("__go__","Payment confirm")}break;
   case "create":{agiBubble("🎫 Token ban raha hai...","agent");
-   const resp=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone:AGI.data.phone,name:AGI.data.name,age:AGI.data.age||null,gender:AGI.data.gender||"",complaint:AGI.data.complaint,visit_mode:AGI.data.visit_mode,source:"reception",payment_status:AGI.data.payment_status})});
+   const resp=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone:AGI.data.phone,name:AGI.data.name,age:AGI.data.age||null,gender:AGI.data.gender||"",complaint:AGI.data.complaint,visit_mode:AGI.data.visit_mode,source:"reception",payment_status:AGI.data.payment_status,payment_method:AGI.data.method||"",fee:AGI.data.fee||0})});
    if(!resp.ok)throw new Error("Agent error "+resp.status);
    const r=await resp.json();
    agiAsk('<div style="border-left:4px solid #059669;padding-left:10px"><strong style="font-size:22px">🎫 Token #'+escapeHtml(String(r.tokenNumber))+'</strong><br>'+escapeHtml(AGI.data.name)+" | "+escapeHtml(AGI.data.complaint)+"<br>💰 Rs. "+AGI.data.fee+" — "+escapeHtml(AGI.data.method)+" ("+(AGI.data.payment_status==="paid"?"✅ Paid":"🕐 Udhaar")+')<br><small>Patient queue mein shamil ho gaya.</small></div>',[{label:"➕ Agla patient",value:"__restart__"}]);
@@ -647,6 +647,45 @@ async function cloudUpdateQueue(table,id,status){
     if(error)throw error;
     cloudLoadQueues();
   }catch(e){alert("Update fail: "+e.message)}
+}
+</script>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">📊 Daily Report</h2>
+<div class="card" id="dailyReportCard">
+<h2>Aaj Ka Hisaab <span class="pill blue">Owner/Billing</span></h2>
+<div style="margin:8px 0"><button class="success" onclick="loadDailyReport()">📊 Aaj Ki Report Nikalo</button> <span id="dailyReportStatus" style="font-size:12px;color:#64748b"></span></div>
+<div id="dailyReportBody"></div>
+</div>
+<script>
+async function loadDailyReport(){
+  const st=qs("dailyReportStatus"),body=qs("dailyReportBody");
+  try{
+    if(!window.CLINIC_ORG_ID){st.textContent="Pehle login karo.";return}
+    st.textContent="Load ho raha hai...";
+    const today=new Date();today.setHours(0,0,0,0);
+    const iso=today.toISOString();
+    const [tk,ph,lb]=await Promise.all([
+      sb.from('tokens').select('token_number,payment_status,payment_method,fee,status,patients(full_name)').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',iso).order('token_number'),
+      sb.from('pharmacy_queue').select('status').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',iso),
+      sb.from('lab_queue').select('status').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',iso)
+    ]);
+    const tokens=tk.data||[],phQ=ph.data||[],lbQ=lb.data||[];
+    const paid=tokens.filter(t=>t.payment_status==='paid');
+    const unpaid=tokens.filter(t=>t.payment_status!=='paid');
+    const totalCollected=paid.reduce((s,t)=>s+(parseFloat(t.fee)||0),0);
+    const totalPending=unpaid.reduce((s,t)=>s+(parseFloat(t.fee)||0),0);
+    const byMethod={};paid.forEach(t=>{const m=t.payment_method||'--';byMethod[m]=(byMethod[m]||0)+(parseFloat(t.fee)||0)});
+    body.innerHTML=
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:10px 0">'+
+      '<div class="list-item" style="text-align:center"><div style="font-size:26px;font-weight:700">'+tokens.length+'</div><small>Total Patients</small></div>'+
+      '<div class="list-item" style="text-align:center;border-left:4px solid #059669"><div style="font-size:26px;font-weight:700">Rs. '+totalCollected.toLocaleString()+'</div><small>Wasool Hua ('+paid.length+' paid)</small></div>'+
+      '<div class="list-item" style="text-align:center;border-left:4px solid #d97706"><div style="font-size:26px;font-weight:700">Rs. '+totalPending.toLocaleString()+'</div><small>Baqaya/Udhaar ('+unpaid.length+')</small></div>'+
+      '<div class="list-item" style="text-align:center"><div style="font-size:26px;font-weight:700">'+phQ.filter(r=>r.status==='dispensed').length+'/'+phQ.length+'</div><small>Pharmacy Dispensed</small></div>'+
+      '<div class="list-item" style="text-align:center"><div style="font-size:26px;font-weight:700">'+lbQ.filter(r=>['completed','verified'].includes(r.status)).length+'/'+lbQ.length+'</div><small>Lab Complete</small></div>'+
+      '</div>'+
+      (Object.keys(byMethod).length?'<div class="list-item"><strong>Payment Tareeqa:</strong> '+Object.entries(byMethod).map(([m,v])=>escapeHtml(m)+': Rs. '+v.toLocaleString()).join(' | ')+'</div>':'')+
+      (unpaid.length?'<div class="list-item" style="border-left:4px solid #d97706"><strong>Udhaar/Unpaid:</strong><br>'+unpaid.map(t=>'#'+t.token_number+' '+escapeHtml(t.patients?.full_name||'--')+' (Rs. '+(t.fee||0)+')').join('<br>')+'</div>':'');
+    st.textContent="Updated: "+new Date().toLocaleTimeString();
+  }catch(e){st.textContent="Error: "+e.message}
 }
 </script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">⚙ Settings</h2>
