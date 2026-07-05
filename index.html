@@ -1406,7 +1406,7 @@ function updateActiveMedicationsFromPrescription(pid,pres){pres.medicines.forEac
 function aiKeyStorage(provider){return AI_KEY_PREFIX+(provider||getSelectedAIProvider())}
 function getAIProviderSettings(){try{return JSON.parse(localStorage.getItem(AI_PROVIDER_SETTINGS_STORAGE)||"{}")}catch{return {}}}
 function setAIProviderSettings(s){localStorage.setItem(AI_PROVIDER_SETTINGS_STORAGE,JSON.stringify(s||{}))}
-function getSelectedAIProvider(){let el=qs("aiProvider");return (el&&el.value)||getAIProviderSettings().provider||"gemini"}
+function getSelectedAIProvider(){let el=qs("aiProvider");let p=(el&&el.value)||getAIProviderSettings().provider||"gemini";if(p!=="gemini"&&p!=="offline"){let k=localStorage.getItem(aiKeyStorage(p))||"";if(!k)return "gemini"}return p}
 function getProviderConfig(provider=getSelectedAIProvider()){return AI_PROVIDER_CONFIGS[provider]||AI_PROVIDER_CONFIGS.gemini}
 function cleanAIModelName(model){return String(model||"").trim().replace(/^models\//i,"")}
 function isDeprecatedAIModel(model){return AI_DEPRECATED_GEMINI_MODEL_RE.test(String(model||"").trim())}
