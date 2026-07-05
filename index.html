@@ -1321,7 +1321,7 @@ function applyRoleBasedView(){
   if(!role) return;
   const lb=document.getElementById('logoutBtnFixed');
   if(lb&&window.CLINIC_SESSION.profile)lb.textContent=(window.CLINIC_SESSION.profile.full_name||'')+' ('+role+') | Logout';
-  if(ROLE_VIEW_ALWAYS_FULL.includes(role)||role==='doctor')return;
+  if(ROLE_VIEW_ALWAYS_FULL.includes(role)||role==='doctor'){try{if(qs('dmFab'))qs('dmFab').style.display='block';if(role==='doctor')dmOpen()}catch(e){}return}
   const allowed = ROLE_ALLOWED_HEADINGS[role];
   if(!allowed||!allowed.length)return;
   const cards=Array.from(document.querySelectorAll('.card'));
@@ -3633,6 +3633,123 @@ function fdRefreshAll(){
 }
 document.addEventListener("DOMContentLoaded",()=>{setTimeout(()=>{try{fdShowView("frontdesk")}catch(e){console.warn("front desk init",e)}},50)});
 /* ===================== End Front Desk / Agentic Workflow v9.5 ===================== */
+</script>
+
+<button id="dmFab" style="display:none;position:fixed;bottom:16px;right:14px;z-index:9998;background:#095c40;color:#fff;border:none;border-radius:50px;padding:14px 20px;font-size:15px;font-weight:700;box-shadow:0 6px 20px rgba(0,0,0,.3);cursor:pointer" onclick="dmOpen()">🩺 Doctor Mode</button>
+<div id="doctorModeOverlay" style="display:none;position:fixed;inset:0;background:#f8fafc;z-index:9000;overflow:auto;padding:12px;box-sizing:border-box">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+    <strong style="font-size:18px;color:#095c40">🩺 Doctor Mode</strong>
+    <div><button class="light" onclick="dmLoad()">🔄</button> <button class="warning" onclick="qs('doctorModeOverlay').style.display='none'">✖ Band</button></div>
+  </div>
+  <div id="dmChips" style="display:flex;gap:6px;overflow-x:auto;padding:10px 0"></div>
+  <div id="dmPatient" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px;display:none">
+    <div id="dmSummary"></div>
+    <div id="dmHistory" style="margin-top:6px"></div>
+    <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+      <button class="light" onclick="dmSetMode('write')">✍️ Qalam se Likho</button>
+      <button class="light" onclick="dmVoice()">🎤 Bolo</button>
+      <span style="font-size:12px;color:#64748b;align-self:center" id="dmVoiceStatus"></span>
+    </div>
+    <div id="dmCanvasWrap" style="display:none;margin-top:8px">
+      <canvas id="dmCanvas" style="width:100%;height:280px;background:#fff;border:2px dashed #94a3b8;border-radius:10px;touch-action:none"></canvas>
+      <div style="margin-top:6px"><button class="light" onclick="dmCanvasClear()">🧹 Saaf</button> <button class="success" onclick="dmReadHandwriting()">📖 Likhawat Parho (AI)</button> <span id="dmHwStatus" style="font-size:12px;color:#64748b"></span></div>
+    </div>
+    <textarea id="dmNote" rows="4" style="width:100%;box-sizing:border-box;margin-top:8px;font-size:15px" placeholder="Note yahan aayega (qalam/awaaz/type — teeno se)..."></textarea>
+    <div style="margin-top:8px">
+      <button class="light" onclick="dmDraft()">🤖 AI Draft</button>
+      <button class="success" id="dmApproveBtn" style="display:none" onclick="dmApprove()">✅ Approve & Auto-Route</button>
+      <span id="dmStatus" style="font-size:12px;color:#64748b"></span>
+    </div>
+    <div id="dmDraftView" style="margin-top:8px"></div>
+  </div>
+</div>
+<script>
+function dmOpen(){qs('doctorModeOverlay').style.display='block';dmLoad()}
+async function dmLoad(){
+  try{
+    if(!window.CLINIC_ORG_ID){alert('Pehle login karo.');return}
+    const today=new Date();today.setHours(0,0,0,0);
+    const {data}=await sb.from('tokens').select('id,token_number,status,visit_id,patient_id,patients(full_name,age,gender),visits(chief_complaint)').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()).in('status',['registered','waiting_vitals','vitals_done','waiting_doctor','with_doctor']).order('token_number');
+    const rows=data||[];window.DD_ROWS=window.DD_ROWS||{};rows.forEach(r=>DD_ROWS[r.id]=r);
+    qs('dmChips').innerHTML=rows.length?rows.map(t=>'<button class="light" style="white-space:nowrap;padding:8px 14px;border-radius:20px" onclick="dmSelect(\''+t.id+'\')">#'+t.token_number+' '+escapeHtml(t.patients?.full_name||'--')+'</button>').join(''):'<small>Aaj koi patient queue mein nahi.</small>';
+  }catch(e){alert('Load fail: '+e.message)}
+}
+async function dmSelect(tid){
+  const t=window.DD_ROWS&&DD_ROWS[tid];if(!t)return;
+  window.DD_SEL=t;window.DD_DRAFT=null;
+  qs('dmPatient').style.display='block';qs('dmDraftView').innerHTML='';qs('dmApproveBtn').style.display='none';qs('dmNote').value='';
+  let vitHtml='';
+  try{const {data:v}=await sb.from('vitals').select('*').eq('visit_id',t.visit_id).order('created_at',{ascending:false}).limit(1);
+    if(v&&v.length){const x=v[0];vitHtml='<small>🩺 BP: '+escapeHtml(x.bp||'--')+' | Pulse: '+(x.pulse||'--')+' | Temp: '+(x.temperature||'--')+' | SpO2: '+(x.spo2||'--')+(x.is_abnormal?' <span class="pill" style="background:#fee2e2;color:#991b1b">⚠️ ABNORMAL</span>':'')+'</small>'}}catch(e){}
+  try{if(t.status!=='with_doctor')await sb.from('tokens').update({status:'with_doctor'}).eq('id',t.id)}catch(e){}
+  qs('dmSummary').innerHTML='<strong style="font-size:17px">#'+t.token_number+' '+escapeHtml(t.patients?.full_name||'')+'</strong>'+(t.patients?.age?' | '+t.patients.age+' saal':'')+(t.patients?.gender?' | '+escapeHtml(t.patients.gender):'')+'<br><small>Shikayat: '+escapeHtml(t.visits?.chief_complaint||'--')+'</small><br>'+vitHtml;
+  qs('dmHistory').innerHTML='<small style="color:#64748b">🧠 History...</small>';
+  qs('dmHistory').innerHTML=await buildPatientHistoryHtml(t.patient_id,t.visit_id);
+}
+function dmSetMode(m){
+  const w=qs('dmCanvasWrap');
+  if(m==='write'){w.style.display=w.style.display==='none'?'block':'none';if(w.style.display==='block')dmCanvasInit()}
+}
+let _dmCtx=null,_dmDrawing=false;
+function dmCanvasInit(){
+  const c=qs('dmCanvas');
+  if(c.width!==c.offsetWidth*2){c.width=c.offsetWidth*2;c.height=560}
+  _dmCtx=c.getContext('2d');_dmCtx.fillStyle='#fff';_dmCtx.fillRect(0,0,c.width,c.height);
+  _dmCtx.strokeStyle='#111';_dmCtx.lineWidth=3;_dmCtx.lineCap='round';_dmCtx.lineJoin='round';
+  if(c._wired)return;c._wired=true;
+  const pos=e=>{const r=c.getBoundingClientRect();return{x:(e.clientX-r.left)*(c.width/r.width),y:(e.clientY-r.top)*(c.height/r.height)}};
+  c.addEventListener('pointerdown',e=>{e.preventDefault();_dmDrawing=true;const p=pos(e);_dmCtx.beginPath();_dmCtx.moveTo(p.x,p.y)});
+  c.addEventListener('pointermove',e=>{if(!_dmDrawing)return;e.preventDefault();const p=pos(e);_dmCtx.lineTo(p.x,p.y);_dmCtx.stroke()});
+  ['pointerup','pointerleave','pointercancel'].forEach(ev=>c.addEventListener(ev,()=>{_dmDrawing=false}));
+}
+function dmCanvasClear(){if(_dmCtx){const c=qs('dmCanvas');_dmCtx.fillStyle='#fff';_dmCtx.fillRect(0,0,c.width,c.height)}}
+async function dmReadHandwriting(){
+  const st=qs('dmHwStatus');
+  try{
+    st.textContent='🧠 AI likhawat parh raha hai...';
+    const c=qs('dmCanvas');
+    const b64=c.toDataURL('image/png').split(',')[1];
+    const out=await callSelectedAI('Read the handwritten clinical note in this image. It may be English, Urdu script, or Roman Urdu with medical shorthand (Rx, tds, bd, od, mg). Return ONLY the transcribed text.',{json:false,maxOutputTokens:800,temperature:0,parts:[{inline_data:{mime_type:'image/png',data:b64}}]});
+    const txt=String(out).trim();
+    if(txt){qs('dmNote').value=(qs('dmNote').value?qs('dmNote').value+'\n':'')+txt;st.textContent='✅ Note mein add — check kar lo.'}
+    else st.textContent='Parh nahi saka — thoda saaf likho.';
+  }catch(e){st.textContent='';alert('Likhawat masla: '+(e.message||e))}
+}
+let _dmRec=null;
+function dmVoice(){
+  const st=qs('dmVoiceStatus');
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){alert('Is browser mein voice support nahi — Chrome use karo.');return}
+  if(_dmRec){const r=_dmRec;_dmRec=null;r.stop();st.textContent='';return}
+  _dmRec=new SR();_dmRec.lang='ur-PK';_dmRec.continuous=true;_dmRec.interimResults=false;
+  _dmRec.onresult=e=>{for(let i=e.resultIndex;i<e.results.length;i++){if(e.results[i].isFinal){qs('dmNote').value=(qs('dmNote').value?qs('dmNote').value+' ':'')+e.results[i][0].transcript}}};
+  _dmRec.onerror=()=>{st.textContent='🎤 band (error)';_dmRec=null};
+  _dmRec.onend=()=>{if(_dmRec){try{_dmRec.start()}catch(e){}}};
+  _dmRec.start();st.textContent='🎤 Sun raha hoon... (dobara dabao = band)';
+}
+async function dmDraft(){
+  const t=window.DD_SEL;const note=qs('dmNote').value.trim();const st=qs('dmStatus');
+  if(!t){alert('Pehle patient chuno (upar chips se).');return}
+  if(!note){alert('Pehle note likho/bolo.');return}
+  st.textContent='🧠 Draft ban raha hai...';
+  try{
+    const prompt='You are a clinical scribe assistant for a Pakistani GP clinic. Convert the doctor rough note (Roman Urdu/Urdu/English) into a structured prescription DRAFT. Suggestion only; doctor will review. Return ONLY valid JSON: {"diagnosis":"","medicines":[{"name":"","dosage":"","frequency":"OD/BD/TDS","duration":""}],"investigations":[],"advice":"Roman Urdu advice","follow_up_days":3}. Patient: '+(t.patients?.full_name||'')+', age '+(t.patients?.age||'?')+', '+(t.patients?.gender||'')+'. Complaint: '+(t.visits?.chief_complaint||'')+'. Doctor note: '+note;
+    let out=await callSelectedAI(prompt,{json:true,maxOutputTokens:900,temperature:0});
+    out=String(out).replace(/```json|```/g,'').trim();
+    const d=JSON.parse(out);window.DD_DRAFT=d;
+    qs('dmDraftView').innerHTML='<div class="list-item" style="border-left:4px solid #0ea5e9"><strong>Draft (check karo):</strong><br><strong>Dx:</strong> '+escapeHtml(d.diagnosis||'--')+'<br><strong>Rx:</strong> '+((d.medicines||[]).map(m=>escapeHtml([m.name,m.dosage,m.frequency,m.duration].filter(Boolean).join(' '))).join('; ')||'--')+'<br><strong>Tests:</strong> '+((d.investigations||[]).map(escapeHtml).join(', ')||'--')+'<br><strong>Advice:</strong> '+escapeHtml(d.advice||'--')+'<br><strong>Follow-up:</strong> '+(d.follow_up_days||0)+' din</div>';
+    qs('dmApproveBtn').style.display='inline-block';st.textContent='';
+  }catch(e){st.textContent='';alert('Draft fail: '+(e.message||e))}
+}
+async function dmApprove(){
+  const st=qs('dmStatus');st.textContent='Saving & routing...';
+  try{
+    await ddApprove();
+    qs('dmApproveBtn').style.display='none';st.textContent='';
+    qs('dmDraftView').innerHTML=qs('ddDraftView').innerHTML;
+    dmLoad();
+  }catch(e){st.textContent='';alert('Approve fail: '+(e.message||e))}
+}
 </script>
 </body>
 </html>
