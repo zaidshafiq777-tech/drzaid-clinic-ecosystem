@@ -184,7 +184,7 @@
     <h2>Dr. Zaid Clinic</h2>
     <p>Apni email aur password se login karein</p>
     <input type="email" id="authEmail" placeholder="Email" autocomplete="username" />
-    <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password" />
+    <div style="position:relative"><input type="password" id="authPassword" placeholder="Password" autocomplete="current-password" style="padding-right:44px" /><button type="button" onclick="const p=document.getElementById('authPassword');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'👁':'🙈'" style="position:absolute;right:6px;top:8px;background:none;border:none;font-size:18px;cursor:pointer;width:auto;padding:2px 6px">👁</button></div>
     <button id="authLoginBtn" onclick="clinicLogin()">Login</button>
     <div id="authGateMsg"></div>
   </div>
@@ -818,11 +818,11 @@ async function ddDraft(){
   if(!note){alert("Pehle rough note likho.");return}
   st.textContent="🧠 AI draft bana raha hai...";
   try{
-    const prompt='You are a clinical scribe assistant for a Pakistani GP clinic. Convert the doctor rough note (Roman Urdu/Urdu/English) into a structured prescription DRAFT. This is a suggestion only; the doctor will review. Return ONLY valid JSON, no markdown: {"diagnosis":"short diagnosis","medicines":[{"name":"","dosage":"","frequency":"OD/BD/TDS","duration":""}],"investigations":["test names"],"advice":"short advice in Roman Urdu","follow_up_days":3}. Patient: '+(t.patients?.full_name||"")+', age '+(t.patients?.age||"?")+', '+(t.patients?.gender||"")+'. Complaint: '+(t.visits?.chief_complaint||"")+'. Doctor note: '+note;
+    const prompt='You are a clinical scribe assistant for a Pakistani GP clinic. Convert the doctor rough note (Roman Urdu/Urdu/English) into a structured prescription DRAFT. This is a suggestion only; the doctor will review. Return ONLY valid JSON, no markdown: {"diagnosis":"final/working diagnosis","differential":["DDx 1","DDx 2"],"medicines":[{"name":"","dosage":"","frequency":"OD/BD/TDS","duration":""}],"investigations":["test names"],"advice":"short advice in Roman Urdu","follow_up_days":3}. Patient: '+(t.patients?.full_name||"")+', age '+(t.patients?.age||"?")+', '+(t.patients?.gender||"")+'. Complaint: '+(t.visits?.chief_complaint||"")+'. Doctor note: '+note;
     let out=await callSelectedAI(prompt,{json:true,maxOutputTokens:900,temperature:0});
     out=String(out).replace(/```json|```/g,"").trim();
     const d=JSON.parse(out);window.DD_DRAFT=d;
-    qs("ddDraftView").innerHTML='<div class="list-item" style="border-left:4px solid #0ea5e9"><strong>Draft (AI suggestion — approve se pehle check karein):</strong><br><strong>Dx:</strong> '+escapeHtml(d.diagnosis||"--")+'<br><strong>Rx:</strong> '+((d.medicines||[]).map(m=>escapeHtml([m.name,m.dosage,m.frequency,m.duration].filter(Boolean).join(" "))).join("; ")||"--")+'<br><strong>Tests:</strong> '+((d.investigations||[]).map(escapeHtml).join(", ")||"--")+'<br><strong>Advice:</strong> '+escapeHtml(d.advice||"--")+'<br><strong>Follow-up:</strong> '+(d.follow_up_days||0)+' din</div>';
+    qs("ddDraftView").innerHTML='<div class="list-item" style="border-left:4px solid #0ea5e9"><strong>Draft (AI suggestion — approve se pehle check karein):</strong><br><strong>Dx:</strong> '+escapeHtml(d.diagnosis||"--")+'<br><strong>DDx:</strong> '+((d.differential||[]).map(escapeHtml).join(", ")||"--")+'<br><strong>Rx:</strong> '+((d.medicines||[]).map(m=>escapeHtml([m.name,m.dosage,m.frequency,m.duration].filter(Boolean).join(" "))).join("; ")||"--")+'<br><strong>Tests:</strong> '+((d.investigations||[]).map(escapeHtml).join(", ")||"--")+'<br><strong>Advice:</strong> '+escapeHtml(d.advice||"--")+'<br><strong>Follow-up:</strong> '+(d.follow_up_days||0)+' din</div>';
     qs("ddApproveBtn").style.display="inline-block";st.textContent="Draft tayyar — check kar ke Approve karo (ya note badal kar dobara draft banao).";
   }catch(e){st.textContent="";alert("Draft fail: "+(e.message||e))}
 }
@@ -831,7 +831,7 @@ async function ddApprove(){
   if(!t||!d){alert("Pehle draft banao.");return}
   st.textContent="Saving & routing...";
   try{
-    const {data:rx,error}=await sb.from('prescriptions').insert({organization_id:window.CLINIC_ORG_ID,visit_id:t.visit_id,patient_id:t.patient_id,diagnosis:d.diagnosis||null,investigations:(d.investigations||[]).join(", ")||null,advice:d.advice||null}).select('id').single();
+    const {data:rx,error}=await sb.from('prescriptions').insert({organization_id:window.CLINIC_ORG_ID,visit_id:t.visit_id,patient_id:t.patient_id,diagnosis:d.diagnosis||null,differential_diagnosis:(d.differential||[]).join(", ")||null,investigations:(d.investigations||[]).join(", ")||null,advice:d.advice||null}).select('id').single();
     if(error)throw error;
     const meds=(d.medicines||[]).filter(m=>m.name).map(m=>({prescription_id:rx.id,medicine_name:m.name,dosage:m.dosage||null,frequency:m.frequency||null,duration:m.duration||null}));
     if(meds.length)await sb.from('prescription_items').insert(meds);
@@ -857,7 +857,7 @@ function ddPrintRx(){
   const medRows=(d.medicines||[]).filter(m=>m.name).map((m,i)=>'<tr><td>'+(i+1)+'</td><td>'+escapeHtml(m.name)+'</td><td>'+escapeHtml(m.dosage||'')+'</td><td>'+escapeHtml(m.frequency||'')+'</td><td>'+escapeHtml(m.duration||'')+'</td></tr>').join('');
   const body='<h1>'+escapeHtml(window.CLINIC_NAME||'Clinic')+'</h1><h2>Prescription</h2><hr>'
     +'<p><strong>Patient:</strong> '+escapeHtml(t.patients?.full_name||'')+(t.patients?.age?' | <strong>Age:</strong> '+t.patients.age:'')+(t.patients?.gender?' | '+escapeHtml(t.patients.gender):'')+' | <strong>Token:</strong> #'+t.token_number+' | <strong>Date:</strong> '+new Date().toLocaleDateString()+'</p>'
-    +'<p><strong>Complaint:</strong> '+escapeHtml(t.visits?.chief_complaint||'--')+'<br><strong>Diagnosis:</strong> '+escapeHtml(d.diagnosis||'--')+'</p>'
+    +'<p><strong>Complaint:</strong> '+escapeHtml(t.visits?.chief_complaint||'--')+'<br><strong>Diagnosis:</strong> '+escapeHtml(d.diagnosis||'--')+((d.differential||[]).length?'<br><strong>Differential:</strong> '+(d.differential||[]).map(escapeHtml).join(', '):'')+'</p>'
     +(medRows?'<table><tr><th>#</th><th>Medicine</th><th>Dose</th><th>Frequency</th><th>Duration</th></tr>'+medRows+'</table>':'')
     +((d.investigations||[]).length?'<p><strong>Investigations:</strong> '+(d.investigations||[]).map(escapeHtml).join(', ')+'</p>':'')
     +(d.advice?'<p><strong>Advice:</strong> '+escapeHtml(d.advice)+'</p>':'')
@@ -1414,7 +1414,7 @@ function getAvailableAIModels(cfg=getProviderConfig()){let seen={};return (cfg.m
 function sanitizeAIModel(model,cfg=getProviderConfig()){let m=cleanAIModelName(model);let list=getAvailableAIModels(cfg);if(!m||isDeprecatedAIModel(m))return "";return list.includes(m)?m:""}
 function getSelectedAIModel(){let settings=getAIProviderSettings();let cfg=getProviderConfig();let custom=(qs("aiCustomModel")?.value||settings.customModel||"").trim();let selected=sanitizeAIModel(qs("aiModel")?.value,cfg)||sanitizeAIModel(settings.model,cfg);if(custom&&selected==="custom-model")return custom;if(custom&&getSelectedAIProvider()==="custom")return custom;return selected||sanitizeAIModel(custom,cfg)||cfg.defaultModel}
 function getSelectedAIBaseUrl(){let settings=getAIProviderSettings();let override=(qs("aiBaseUrlInput")?.value||settings.baseUrl||"").trim();return override||getProviderConfig().baseUrl||""}
-function getSavedAIKey(provider=getSelectedAIProvider()){return localStorage.getItem(aiKeyStorage(provider))||""}
+function getSavedAIKey(provider=getSelectedAIProvider()){if(provider==="gemini")return localStorage.getItem(aiKeyStorage(provider))||"via-n8n-proxy";return localStorage.getItem(aiKeyStorage(provider))||""}
 function getSavedGeminiKey(){return getSavedAIKey(getSelectedAIProvider())}
 function maskKey(key){if(!key)return"No key saved for selected provider";if(key.length<=10)return"Saved key: ********";return"Saved key: "+key.slice(0,6)+"..."+"*".repeat(Math.min(18,Math.max(6,key.length-10)))+"..."+key.slice(-4)}
 function setAIStatus(text,cls){let el=qs("aiProviderStatus")||qs("geminiStatus");if(!el)return;el.textContent=text;el.className="ai-status-line"+(cls?" "+cls:"")}
@@ -3745,11 +3745,11 @@ async function dmDraft(){
   if(!note){alert('Pehle note likho/bolo.');return}
   st.textContent='🧠 Draft ban raha hai...';
   try{
-    const prompt='You are a clinical scribe assistant for a Pakistani GP clinic. Convert the doctor rough note (Roman Urdu/Urdu/English) into a structured prescription DRAFT. Suggestion only; doctor will review. Return ONLY valid JSON: {"diagnosis":"","medicines":[{"name":"","dosage":"","frequency":"OD/BD/TDS","duration":""}],"investigations":[],"advice":"Roman Urdu advice","follow_up_days":3}. Patient: '+(t.patients?.full_name||'')+', age '+(t.patients?.age||'?')+', '+(t.patients?.gender||'')+'. Complaint: '+(t.visits?.chief_complaint||'')+'. Doctor note: '+note;
+    const prompt='You are a clinical scribe assistant for a Pakistani GP clinic. Convert the doctor rough note (Roman Urdu/Urdu/English) into a structured prescription DRAFT. Suggestion only; doctor will review. Return ONLY valid JSON: {"diagnosis":"final/working diagnosis","differential":["DDx 1","DDx 2"],"medicines":[{"name":"","dosage":"","frequency":"OD/BD/TDS","duration":""}],"investigations":[],"advice":"Roman Urdu advice","follow_up_days":3}. Patient: '+(t.patients?.full_name||'')+', age '+(t.patients?.age||'?')+', '+(t.patients?.gender||'')+'. Complaint: '+(t.visits?.chief_complaint||'')+'. Doctor note: '+note;
     let out=await callSelectedAI(prompt,{json:true,maxOutputTokens:900,temperature:0});
     out=String(out).replace(/```json|```/g,'').trim();
     const d=JSON.parse(out);window.DD_DRAFT=d;
-    qs('dmDraftView').innerHTML='<div class="list-item" style="border-left:4px solid #0ea5e9"><strong>Draft (check karo):</strong><br><strong>Dx:</strong> '+escapeHtml(d.diagnosis||'--')+'<br><strong>Rx:</strong> '+((d.medicines||[]).map(m=>escapeHtml([m.name,m.dosage,m.frequency,m.duration].filter(Boolean).join(' '))).join('; ')||'--')+'<br><strong>Tests:</strong> '+((d.investigations||[]).map(escapeHtml).join(', ')||'--')+'<br><strong>Advice:</strong> '+escapeHtml(d.advice||'--')+'<br><strong>Follow-up:</strong> '+(d.follow_up_days||0)+' din</div>';
+    qs('dmDraftView').innerHTML='<div class="list-item" style="border-left:4px solid #0ea5e9"><strong>Draft (check karo):</strong><br><strong>Dx:</strong> '+escapeHtml(d.diagnosis||'--')+'<br><strong>DDx:</strong> '+((d.differential||[]).map(escapeHtml).join(', ')||'--')+'<br><strong>Rx:</strong> '+((d.medicines||[]).map(m=>escapeHtml([m.name,m.dosage,m.frequency,m.duration].filter(Boolean).join(' '))).join('; ')||'--')+'<br><strong>Tests:</strong> '+((d.investigations||[]).map(escapeHtml).join(', ')||'--')+'<br><strong>Advice:</strong> '+escapeHtml(d.advice||'--')+'<br><strong>Follow-up:</strong> '+(d.follow_up_days||0)+' din</div>';
     qs('dmApproveBtn').style.display='inline-block';st.textContent='';
   }catch(e){st.textContent='';alert('Draft fail: '+(e.message||e))}
 }
