@@ -33,6 +33,15 @@ button:disabled{opacity:.6}
 </div>
 <div class="wrap">
   <div class="card">
+    <h2>💬 Clinic Assistant se Baat Karein</h2>
+    <p>Sawal poochein ya likhein "token chahiye" — assistant khud madad karega.</p>
+    <div id="pcMsgs" style="max-height:260px;overflow:auto;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:8px;margin-bottom:8px;font-size:14px"></div>
+    <div style="display:flex;gap:6px">
+      <input id="pcInput" style="flex:1;margin:0" placeholder="Yahan likhein..." onkeydown="if(event.key==='Enter')pcSend()">
+      <button style="width:auto;padding:11px 16px" onclick="pcSend()">➤</button>
+    </div>
+  </div>
+  <div class="card">
     <h2>🎫 Online Token Lein</h2>
     <p>Apni maloomat likhein — token number foran mil jayega. Fee clinic pe counter par ada hogi.</p>
     <input id="bkPhone" placeholder="Mobile number (03xxxxxxxxx)" inputmode="tel">
@@ -85,6 +94,41 @@ async function checkStatus(){
     else{show(res,'ok','<div class="big">🎫 Token #'+d.tokenNumber+'</div>Status: <strong>'+d.status+'</strong><br>'+(d.message||'')+(d.ahead>0?'<br><small>Andaza: taqreeban '+(d.ahead*10)+' minute.</small>':''))}
   }catch(e){show(res,'err','Masla: '+e.message)}
   btn.disabled=false;btn.textContent='Baari Check Karein';
+}
+</script>
+<script>
+const GEMINI_URL="https://drzaid.app.n8n.cloud/webhook/gemini-ai";
+let PC={mode:'free',data:{}};
+function pcBubble(t,who){const c=document.getElementById('pcMsgs');const d=document.createElement('div');d.style.cssText='margin:5px 0;display:flex;justify-content:'+(who==='user'?'flex-end':'flex-start');d.innerHTML='<div style="max-width:85%;padding:8px 11px;border-radius:11px;background:'+(who==='user'?'#095c40;color:#fff':'#fff;border:1px solid #d1fae5')+'">'+t+'</div>';c.appendChild(d);c.scrollTop=c.scrollHeight}
+window.addEventListener('load',()=>{pcBubble('Assalam o Alaikum! 🌙 Main Dr. Zaid Clinic ka assistant hoon. Sawal poochein, ya likhein <em>"token chahiye"</em> — main bana dunga.','a')});
+async function pcSend(){
+  const inp=document.getElementById('pcInput');const v=inp.value.trim();if(!v)return;inp.value='';
+  pcBubble(v.replace(/</g,'&lt;'),'user');
+  try{
+    if(PC.mode==='free'){
+      if(/token|booking|number lena|baari lena|appointment/i.test(v)){PC.mode='phone';pcBubble('Zaroor! Apna <strong>mobile number</strong> batayein (03xxxxxxxxx):','a');return}
+      pcBubble('<em>soch raha hoon...</em>','a');
+      const prompt='You are the friendly assistant of Dr. Zaid Clinic (Pakistan). Reply in short Roman Urdu (2-3 sentences max). Rules: Never give medical diagnosis or medicine names - instead politely advise: "Behtar hai token le kar doctor sahib se check karwa lein." For fees/timings/location say: "Baraah-e-karam clinic par maloom karein." If the user wants a token/appointment, reply exactly: TOKEN_START . User message: '+v;
+      const r=await fetch(GEMINI_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.3,maxOutputTokens:200}})});
+      const d=await r.json();
+      let txt=(d&&d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts&&d.candidates[0].content.parts[0].text)||'Maazrat, dobara likhein.';
+      const c=document.getElementById('pcMsgs');c.removeChild(c.lastChild);
+      if(/TOKEN_START/.test(txt)){PC.mode='phone';pcBubble('Zaroor! Apna <strong>mobile number</strong> batayein:','a')}
+      else pcBubble(txt.replace(/</g,'&lt;'),'a');
+      return;
+    }
+    if(PC.mode==='phone'){const ph=v.replace(/[^0-9+]/g,'');if(ph.length<10){pcBubble('Poora number likhein (jaise 03001234567):','a');return}PC.data.phone=ph;PC.mode='name';pcBubble('Shukriya! Ab apna <strong>poora naam</strong>:','a');return}
+    if(PC.mode==='name'){PC.data.name=v;PC.mode='complaint';pcBubble('Kya <strong>masla/shikayat</strong> hai? (mukhtasar):','a');return}
+    if(PC.mode==='complaint'){
+      PC.data.complaint=v;pcBubble('<em>Token ban raha hai...</em>','a');
+      const r=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:PC.data.phone,name:PC.data.name,age:null,gender:'',complaint:PC.data.complaint,visit_mode:'in_clinic',source:'online',payment_status:'unpaid'})});
+      const d=await r.json();
+      const c=document.getElementById('pcMsgs');c.removeChild(c.lastChild);
+      pcBubble('<div class="big">🎫 Token #'+d.tokenNumber+'</div>'+PC.data.name+' — token ban gaya! Clinic tashreef layen, fee counter par. Neeche "Baari Check" se position dekh sakte hain.','a');
+      document.getElementById('stPhone').value=PC.data.phone;
+      PC={mode:'free',data:{}};return;
+    }
+  }catch(e){pcBubble('Maazrat, masla aa gaya — dobara koshish karein.','a');PC={mode:'free',data:{}}}
 }
 </script>
 </body>
