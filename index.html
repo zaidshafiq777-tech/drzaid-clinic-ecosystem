@@ -211,6 +211,7 @@ async function clinicLogin(){
     msg.className='ok'; msg.textContent='Welcome, '+(profile.full_name||email)+' ('+profile.role+'). Syncing cloud data...';
     await cloudSyncOnLogin();
     applyRoleBasedView();
+    try{chatShellOpen()}catch(e){}
     msg.textContent='Welcome, '+(profile.full_name||email)+' ('+profile.role+')';
     setTimeout(()=>{
       document.getElementById('authGateOverlay').style.display='none';
@@ -235,6 +236,7 @@ async function clinicLogout(){
       window.CLINIC_SESSION.profile=profile;
       await cloudSyncOnLogin();
       applyRoleBasedView();
+      try{chatShellOpen()}catch(e){}
       document.getElementById('authGateOverlay').style.display='none';
       document.getElementById('logoutBtnFixed').style.display='block';
     }
@@ -1341,7 +1343,7 @@ function applyRoleBasedView(){
   cards.forEach(card=>{
     const txt=(card.textContent||'');
     const ok=allowed.some(a=>txt.indexOf(a)!==-1);
-    card.style.display=ok?'':'none';
+    card.style.display=ok?'':'none';card.__roleBlocked=!ok;
     const prev=card.previousElementSibling;
     if(prev&&prev.tagName==='H2')prev.style.display=ok?'':'none';
     if(ok)shownCount++;
@@ -3761,6 +3763,91 @@ async function dmApprove(){
     qs('dmDraftView').innerHTML=qs('ddDraftView').innerHTML;
     dmLoad();
   }catch(e){st.textContent='';alert('Approve fail: '+(e.message||e))}
+}
+</script>
+
+<button id="chatFab" style="display:none;position:fixed;bottom:16px;right:110px;z-index:9997;background:#0ea5e9;color:#fff;border:none;border-radius:50px;padding:14px 18px;font-size:15px;font-weight:700;box-shadow:0 6px 20px rgba(0,0,0,.3);cursor:pointer" onclick="chatShellOpen()">💬 Assistant</button>
+<div id="chatShell" style="display:none;position:fixed;inset:0;background:#f1f5f9;z-index:8000;flex-direction:column;padding:10px;box-sizing:border-box">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:6px">
+    <strong style="font-size:17px;color:#095c40">💬 Clinic Assistant</strong>
+    <span id="chatShellRole" style="font-size:12px;color:#64748b"></span>
+  </div>
+  <div id="chatMsgs" style="flex:1;overflow:auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px"></div>
+  <div id="chatPanelWrap" style="display:none;flex:1;overflow:auto;background:#fff;border:2px solid #0ea5e9;border-radius:12px;padding:8px;margin-top:6px">
+    <button class="warning" style="padding:5px 12px;font-size:13px" onclick="chatPanelClose()">⬅ Wapas Chat</button>
+    <div id="chatPanelHost"></div>
+  </div>
+  <div id="chatChips" style="display:flex;gap:6px;overflow-x:auto;padding:8px 0"></div>
+  <div style="display:flex;gap:6px">
+    <input id="chatInput" style="flex:1;padding:11px 12px;border:1px solid #cbd5e1;border-radius:10px;font-size:15px" placeholder="Likho ya bolo... (jaise: token banao, queue dikhao, hisaab)" onkeydown="if(event.key==='Enter')chatSend()">
+    <button class="light" onclick="chatVoice()" id="chatMicBtn">🎤</button>
+    <button class="success" onclick="chatSend()">➤</button>
+  </div>
+</div>
+<script>
+const CHAT_INTENTS=[
+ {k:/token|naya patient|register|intake|marij (banao|likho)/i,label:"🎫 Naya Token",card:"agenticIntakeCard",run:()=>{if(typeof agiStart==='function')agiStart()},msg:"Intake agent hazir — patient ka number batao 👇"},
+ {k:/queue|qatar|line|board|waiting/i,label:"📋 Queue",card:"queueBoardCard",run:()=>{if(typeof loadQueueBoard==='function')loadQueueBoard()},msg:"Aaj ki queue 👇"},
+ {k:/doctor|marize dekh|dekhna|prescription likh/i,label:"👨‍⚕️ Doctor",card:null,run:()=>{if(typeof dmOpen==='function')dmOpen()},msg:"Doctor Mode khol raha hoon..."},
+ {k:/pharmacy|dawai|medicine|dispense/i,label:"💊 Pharmacy",card:"cloudQueuesCard",run:()=>{if(typeof cloudLoadQueues==='function')cloudLoadQueues()},msg:"Pharmacy/Lab queues 👇"},
+ {k:/stock|inventory|batch|expiry/i,label:"📦 Stock",card:"inventoryCard",run:()=>{if(typeof loadInventory==='function')loadInventory()},msg:"Inventory 👇"},
+ {k:/\blab\b|test result|sample/i,label:"🔬 Lab",card:"cloudQueuesCard",run:()=>{if(typeof cloudLoadQueues==='function')cloudLoadQueues()},msg:"Lab queue 👇"},
+ {k:/hisa+b|report|cash|kamai|aaj ka/i,label:"💰 Hisaab",card:"dailyReportCard",run:()=>{if(typeof loadDailyReport==='function')loadDailyReport()},msg:"Aaj ka hisaab 👇"},
+ {k:/follow/i,label:"📅 Follow-ups",card:"followupsCard",run:()=>{if(typeof loadFollowups==='function')loadFollowups()},msg:"Aaj ke follow-ups 👇"},
+ {k:/udhaar|invoice|bill|wasool|baqaya/i,label:"🧾 Udhaar",card:"invoicesCard",run:()=>{if(typeof loadInvoices==='function')loadInvoices()},msg:"Invoices/Udhaar 👇"},
+ {k:/history|purani|record dhoond|talash/i,label:"🧠 History",card:"cloudHistoryCard",run:()=>{},msg:"Phone/naam se dhoondo 👇"},
+ {k:/advance|purana view|full view|sab dikhao/i,label:"⚙️ Purana View",card:null,run:()=>{qs('chatShell').style.display='none';qs('chatFab').style.display='block'},msg:"Purana poora view khol diya."}
+];
+function chatBubble(t,who){const c=qs('chatMsgs');const d=document.createElement('div');d.style.cssText='margin:6px 0;display:flex;justify-content:'+(who==='user'?'flex-end':'flex-start');d.innerHTML='<div style="max-width:85%;padding:9px 13px;border-radius:12px;font-size:14.5px;background:'+(who==='user'?'#0ea5e9;color:#fff':'#f1f5f9')+'">'+t+'</div>';c.appendChild(d);c.scrollTop=c.scrollHeight}
+function chatRenderChips(){qs('chatChips').innerHTML=CHAT_INTENTS.map((it,i)=>'<button class="light" style="white-space:nowrap;padding:7px 13px;border-radius:20px;font-size:13px" onclick="chatRunIntent('+i+')">'+it.label+'</button>').join('')}
+function chatShellOpen(){
+  const s=qs('chatShell');s.style.display='flex';qs('chatFab').style.display='none';
+  const prof=window.CLINIC_SESSION&&window.CLINIC_SESSION.profile;
+  qs('chatShellRole').textContent=prof?(prof.full_name+' ('+prof.role+')'):'';
+  if(!s._greeted){s._greeted=true;chatRenderChips();
+    chatBubble('Assalam o Alaikum'+(prof?' <strong>'+escapeHtml(prof.full_name||'')+'</strong>':'')+'! 🌙 Main aapka clinic assistant hoon. Neeche buttons dabao ya likh do — jaise <em>"token banao"</em>, <em>"queue dikhao"</em>, <em>"aaj ka hisaab"</em>.','agent')}
+}
+function chatPanelClose(){
+  const host=qs('chatPanelHost');
+  Array.from(host.children).forEach(card=>{
+    if(card.__homeParent){card.__homeParent.insertBefore(card,card.__homeNext||null);card.style.display=card.__homeDisplay||''}
+  });
+  qs('chatPanelWrap').style.display='none';qs('chatMsgs').style.display='block';
+}
+function chatPanelOpen(cardId){
+  const card=document.getElementById(cardId);
+  if(!card){chatBubble('Ye section is view mein nahi mila.','agent');return false}
+  if(card.style.display==='none'&&card.__roleBlocked){chatBubble('Maazrat — aapke role mein ye section nahi hai.','agent');return false}
+  chatPanelClose();
+  if(!card.__homeParent){card.__homeParent=card.parentElement;card.__homeNext=card.nextSibling;card.__homeDisplay=card.style.display}
+  card.style.display='';
+  qs('chatPanelHost').appendChild(card);
+  qs('chatPanelWrap').style.display='block';qs('chatMsgs').style.display='none';
+  return true;
+}
+function chatRunIntent(i){
+  const it=CHAT_INTENTS[i];
+  chatBubble(it.label,'user');
+  chatBubble(it.msg,'agent');
+  if(it.card){if(chatPanelOpen(it.card))try{it.run()}catch(e){}}
+  else{try{it.run()}catch(e){}}
+}
+function chatSend(){
+  const v=qs('chatInput').value.trim();if(!v)return;qs('chatInput').value='';
+  chatBubble(escapeHtml(v),'user');
+  const idx=CHAT_INTENTS.findIndex(it=>it.k.test(v));
+  if(idx>=0){const it=CHAT_INTENTS[idx];chatBubble(it.msg,'agent');if(it.card){if(chatPanelOpen(it.card))try{it.run()}catch(e){}}else{try{it.run()}catch(e){}}}
+  else chatBubble('Samajh nahi aaya 🤔 — neeche buttons try karo, ya likho: <em>token banao / queue / hisaab / pharmacy / lab / follow-ups / udhaar / doctor / history</em>','agent');
+}
+let _chatRec=null;
+function chatVoice(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){alert('Voice ke liye Chrome use karo.');return}
+  if(_chatRec){const r=_chatRec;_chatRec=null;r.stop();qs('chatMicBtn').textContent='🎤';return}
+  _chatRec=new SR();_chatRec.lang='ur-PK';_chatRec.interimResults=false;
+  _chatRec.onresult=e=>{qs('chatInput').value=e.results[0][0].transcript;_chatRec=null;qs('chatMicBtn').textContent='🎤';chatSend()};
+  _chatRec.onerror=()=>{_chatRec=null;qs('chatMicBtn').textContent='🎤'};
+  _chatRec.start();qs('chatMicBtn').textContent='🔴';
 }
 </script>
 </body>
