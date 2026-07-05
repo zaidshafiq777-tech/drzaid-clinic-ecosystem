@@ -1,79 +1,91 @@
 <!DOCTYPE html>
-<html lang="ur" dir="ltr">
+<html lang="ur">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dr. Zaid Clinic — Online Token</title>
 <meta name="theme-color" content="#095c40">
+<link rel="icon" type="image/png" href="icon-192.png">
 <style>
 *{box-sizing:border-box}
-body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#f0f7f4;min-height:100vh;display:flex;flex-direction:column}
-header{background:#095c40;color:#fff;padding:18px 16px;text-align:center}
-header h1{margin:0;font-size:21px}
-header p{margin:4px 0 0;font-size:13px;opacity:.85}
-main{flex:1;max-width:480px;width:100%;margin:0 auto;padding:14px}
-.chat{background:#fff;border-radius:14px;padding:12px;min-height:300px;box-shadow:0 2px 12px rgba(0,0,0,.06)}
-.b{margin:8px 0;display:flex}
-.b.agent{justify-content:flex-start}
-.b.user{justify-content:flex-end}
-.b>div{max-width:85%;padding:10px 14px;border-radius:14px;font-size:15px;line-height:1.5}
-.b.agent>div{background:#e8f4ee;color:#0a2e21}
-.b.user>div{background:#095c40;color:#fff}
-.opts{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
-.opts button{background:#fff;border:2px solid #095c40;color:#095c40;border-radius:22px;padding:9px 16px;font-size:14.5px;font-weight:600;cursor:pointer}
-.opts button:active{background:#095c40;color:#fff}
-.inrow{display:flex;gap:8px;margin-top:10px}
-.inrow input{flex:1;padding:12px;border:1.5px solid #cbd5e1;border-radius:10px;font-size:15px}
-.inrow button{background:#095c40;color:#fff;border:none;border-radius:10px;padding:0 18px;font-size:16px;font-weight:700;cursor:pointer}
-.token{border:3px solid #095c40;border-radius:14px;text-align:center;padding:16px;margin-top:8px;background:#f6fffb}
-.token .n{font-size:52px;font-weight:800;color:#095c40;line-height:1}
-footer{text-align:center;font-size:12px;color:#5a6c64;padding:10px}
+body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#f0fdf4;color:#111;min-height:100vh}
+.hdr{background:#095c40;color:#fff;padding:22px 16px;text-align:center}
+.hdr h1{margin:0;font-size:22px}
+.hdr p{margin:6px 0 0;font-size:13px;opacity:.85}
+.wrap{max-width:520px;margin:0 auto;padding:16px}
+.card{background:#fff;border:1px solid #d1fae5;border-radius:14px;padding:16px;margin-bottom:14px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+.card h2{margin:0 0 4px;font-size:17px;color:#095c40}
+.card p{margin:0 0 12px;font-size:13px;color:#555}
+input,textarea{width:100%;padding:11px 12px;border:1px solid #cbd5e1;border-radius:9px;font-size:15px;margin-bottom:8px}
+button{width:100%;padding:13px;border:none;border-radius:10px;background:#095c40;color:#fff;font-size:15px;font-weight:700;cursor:pointer}
+button:disabled{opacity:.6}
+.res{margin-top:12px;padding:12px;border-radius:10px;font-size:14.5px;display:none}
+.res.ok{display:block;background:#ecfdf5;border:1px solid #10b981}
+.res.err{display:block;background:#fef2f2;border:1px solid #ef4444}
+.big{font-size:30px;font-weight:800;color:#095c40}
+.ft{text-align:center;font-size:12px;color:#64748b;padding:14px}
 </style>
 </head>
 <body>
-<header>
-  <h1>🏥 Dr. Zaid Clinic</h1>
-  <p>Ghar baithe token lein — clinic aa kar seedha check-up karwayen</p>
-</header>
-<main>
-  <div class="chat" id="chat"></div>
-  <div class="opts" id="opts"></div>
-  <div class="inrow" id="inrow">
-    <input id="inp" placeholder="Jawab yahan likhein..." onkeydown="if(event.key==='Enter')send()">
-    <button onclick="send()">➤</button>
+<div class="hdr">
+  <h1>🌙 Dr. Zaid Clinic</h1>
+  <p>Ghar baithe token lein — clinic aa kar seedha apni baari pe check-up karwayen</p>
+</div>
+<div class="wrap">
+  <div class="card">
+    <h2>🎫 Online Token Lein</h2>
+    <p>Apni maloomat likhein — token number foran mil jayega. Fee clinic pe counter par ada hogi.</p>
+    <input id="bkPhone" placeholder="Mobile number (03xxxxxxxxx)" inputmode="tel">
+    <input id="bkName" placeholder="Poora naam">
+    <input id="bkAge" placeholder="Umar (saal)" inputmode="numeric">
+    <textarea id="bkComplaint" rows="2" placeholder="Masla / shikayat (jaise: bukhar 2 din se)"></textarea>
+    <button id="bkBtn" onclick="bookToken()">Token Hasil Karein</button>
+    <div id="bkRes" class="res"></div>
   </div>
-</main>
-<footer>Dr. Zaid AI Healthcare Ecosystem</footer>
+  <div class="card">
+    <h2>🔍 Apni Baari Check Karein</h2>
+    <p>Agar aaj ka token pehle se hai to phone number se dekhen ke kitne log pehle hain.</p>
+    <input id="stPhone" placeholder="Mobile number (03xxxxxxxxx)" inputmode="tel">
+    <button id="stBtn" onclick="checkStatus()">Baari Check Karein</button>
+    <div id="stRes" class="res"></div>
+  </div>
+</div>
+<div class="ft">Dr. Zaid AI Healthcare Ecosystem · Staff login: <a href="index.html">yahan</a></div>
 <script>
-const WEBHOOK="https://drzaid.app.n8n.cloud/webhook/patient-intake";
-let S={step:"phone",d:{}};
-const chat=document.getElementById('chat'),opts=document.getElementById('opts'),inp=document.getElementById('inp'),inrow=document.getElementById('inrow');
-function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function bub(t,who){const d=document.createElement('div');d.className='b '+who;d.innerHTML='<div>'+t+'</div>';chat.appendChild(d);chat.scrollTop=chat.scrollHeight;window.scrollTo(0,document.body.scrollHeight)}
-function ask(t,o){bub(t,'agent');opts.innerHTML='';(o||[]).forEach(x=>{const b=document.createElement('button');b.textContent=x.l;b.onclick=()=>answer(x.v,x.l);opts.appendChild(b)});inrow.style.display=(o&&o.length)?'none':'flex';if(!o||!o.length)inp.focus()}
-function send(){const v=inp.value.trim();if(!v)return;inp.value='';answer(v,v)}
-async function answer(v,label){
- bub(esc(label),'user');opts.innerHTML='';
- try{
- switch(S.step){
-  case 'phone':{const p=String(v).replace(/[^0-9+]/g,'');if(p.length<10){ask('Poora mobile number likhein (jaise 03001234567)');return}S.d.phone=p;S.step='name';ask('Shukriya! Apna <strong>poora naam</strong> batayein?');break}
-  case 'name':{S.d.name=v;S.step='age';ask('<strong>Umar</strong> kitni hai? (saal mein)');break}
-  case 'age':{const a=parseInt(String(v).replace(/[^0-9]/g,''));if(!a||a>120){ask('Sirf number likhein (jaise 35)');return}S.d.age=a;S.step='gender';ask('Aap:',[{l:'👨 Mard',v:'male'},{l:'👩 Khatoon',v:'female'}]);break}
-  case 'gender':{S.d.gender=v;S.step='complaint';ask('Kya <strong>masla/takleef</strong> hai? (mukhtasar likhein)');break}
-  case 'complaint':{S.d.complaint=v;S.step='confirm';ask('Ji theek hai. Aap <strong>clinic tashreef layenge</strong>? Token abhi ban jayega — fee clinic par reception ko dein.<br><small>(Online video consultation jald shuru ho rahi hai)</small>',[{l:'✅ Haan, token banao',v:'yes'},{l:'❌ Cancel',v:'no'}]);break}
-  case 'confirm':{
-    if(v!=='yes'){ask('Theek hai, koi baat nahi. Dobara token ke liye page refresh karein. Allah Hafiz!');S.step='done';return}
-    ask('🎫 Token ban raha hai...');
-    const r=await fetch(WEBHOOK,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:S.d.phone,name:S.d.name,age:S.d.age,gender:S.d.gender,complaint:S.d.complaint,visit_mode:'in_clinic',source:'online',payment_status:'unpaid'})});
+const INTAKE_URL="https://drzaid.app.n8n.cloud/webhook/patient-intake";
+const STATUS_URL="https://drzaid.app.n8n.cloud/webhook/queue-status";
+function show(el,cls,html){el.className='res '+cls;el.innerHTML=html}
+async function bookToken(){
+  const ph=document.getElementById('bkPhone').value.replace(/[^0-9+]/g,'');
+  const nm=document.getElementById('bkName').value.trim();
+  const ag=parseInt(document.getElementById('bkAge').value)||null;
+  const cm=document.getElementById('bkComplaint').value.trim();
+  const btn=document.getElementById('bkBtn'),res=document.getElementById('bkRes');
+  if(ph.length<10||!nm){show(res,'err','Sahi mobile number aur naam zaroor likhein.');return}
+  btn.disabled=true;btn.textContent='Token ban raha hai...';
+  try{
+    const r=await fetch(INTAKE_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:ph,name:nm,age:ag,gender:'',complaint:cm||'Online booking',visit_mode:'in_clinic',source:'online',payment_status:'unpaid'})});
     if(!r.ok)throw new Error('Server error '+r.status);
-    const j=await r.json();
-    opts.innerHTML='';inrow.style.display='none';
-    bub('<div class="token"><div>Aapka Token</div><div class="n">#'+esc(String(j.tokenNumber))+'</div><div><strong>'+esc(S.d.name)+'</strong></div><div style="font-size:13px;margin-top:6px">📍 Clinic aa kar reception ko token number batayein aur fee ada karein.<br>Apni baari ka intezar karein — shukriya! 🌙</div></div>','agent');
-    S.step='done';break}
-  case 'done':break;
- }}catch(e){ask('❌ Maazrat, masla aa gaya: '+esc(e.message)+' — thori der baad dobara koshish karein ya clinic pe rabta karein.')}
+    const d=await r.json();
+    show(res,'ok','<div class="big">🎫 Token #'+d.tokenNumber+'</div>'+nm+' — aapka token ban gaya!<br><small>Clinic tashreef layen; fee counter par ada hogi.</small>');
+    document.getElementById('stPhone').value=ph;
+  }catch(e){show(res,'err','Maazrat, masla aa gaya: '+e.message+'<br>Dobara koshish karein ya clinic call karein.')}
+  btn.disabled=false;btn.textContent='Token Hasil Karein';
 }
-ask('Assalam o Alaikum! 🌙 Dr. Zaid Clinic mein khush aamdeed.<br>Token lene ke liye apna <strong>mobile number</strong> likhein:');
+async function checkStatus(){
+  const ph=document.getElementById('stPhone').value.replace(/[^0-9+]/g,'');
+  const btn=document.getElementById('stBtn'),res=document.getElementById('stRes');
+  if(ph.length<10){show(res,'err','Sahi mobile number likhein.');return}
+  btn.disabled=true;btn.textContent='Check ho raha hai...';
+  try{
+    const r=await fetch(STATUS_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:ph})});
+    if(!r.ok)throw new Error('Server error '+r.status);
+    const d=await r.json();
+    if(!d.found){show(res,'err',d.message||'Aaj koi token nahi mila is number pe.')}
+    else{show(res,'ok','<div class="big">🎫 Token #'+d.tokenNumber+'</div>Status: <strong>'+d.status+'</strong><br>'+(d.message||'')+(d.ahead>0?'<br><small>Andaza: taqreeban '+(d.ahead*10)+' minute.</small>':''))}
+  }catch(e){show(res,'err','Masla: '+e.message)}
+  btn.disabled=false;btn.textContent='Baari Check Karein';
+}
 </script>
 </body>
 </html>
