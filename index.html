@@ -698,6 +698,34 @@ async function qbSaveVitals(tid,vid,pid){
 }
 
 </script>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">🧠 Patient History (Cloud)</h2>
+<div class="card" id="cloudHistoryCard">
+<h2>Patient History Search <span class="pill blue">Phone/Naam se</span></h2>
+<div style="display:flex;gap:6px;margin:8px 0">
+<input id="chSearch" style="flex:1;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px" placeholder="Phone number ya naam likho..." onkeydown="if(event.key==='Enter')chSearchGo()">
+<button class="success" onclick="chSearchGo()">🔍 Dhoondo</button>
+</div>
+<div id="chResults"></div>
+</div>
+<script>
+async function chSearchGo(){
+  const q=qs("chSearch").value.trim();const res=qs("chResults");
+  if(!q){alert("Phone ya naam likho.");return}
+  if(!window.CLINIC_ORG_ID){alert("Pehle login karo.");return}
+  res.innerHTML='<small>Dhoond raha hoon...</small>';
+  try{
+    const {data,error}=await sb.from('patients').select('id,full_name,phone,age,gender,emr_number').eq('organization_id',window.CLINIC_ORG_ID).or('phone.ilike.%'+q+'%,full_name.ilike.%'+q+'%').limit(6);
+    if(error)throw error;
+    if(!data||!data.length){res.innerHTML='<div class="list-item">Koi patient nahi mila.</div>';return}
+    res.innerHTML=data.map(p=>'<div class="list-item"><strong>'+escapeHtml(p.full_name)+'</strong>'+(p.age?' ('+p.age+')':'')+' | '+escapeHtml(p.phone||"--")+' | '+escapeHtml(p.emr_number||"")+'<br><button class="light" style="padding:4px 10px;font-size:12.5px" onclick="chShowHistory(\''+p.id+'\')">🧠 Poori History</button><div id="chHist_'+p.id+'"></div></div>').join("");
+  }catch(e){res.innerHTML='<div class="list-item" style="border-left:4px solid #dc2626">Error: '+escapeHtml(e.message)+'</div>'}
+}
+async function chShowHistory(pid){
+  const box=qs("chHist_"+pid);if(!box)return;
+  box.innerHTML='<small>Load ho rahi hai...</small>';
+  box.innerHTML=await buildPatientHistoryHtml(pid,null);
+}
+</script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">👨‍⚕️ Doctor Desk (Cloud)</h2>
 <div class="card" id="doctorDeskCard">
 <h2>Mere Paas Waiting Patients <span class="pill green">Note → AI Draft → Approve → Auto-Route</span></h2>
@@ -705,6 +733,7 @@ async function qbSaveVitals(tid,vid,pid){
 <div id="ddList" style="max-height:220px;overflow:auto">Login karke Refresh dabao.</div>
 <div id="ddPanel" style="display:none;margin-top:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px">
 <div id="ddSummary"></div>
+<div id="ddHistory" style="margin-top:6px"></div>
 <textarea id="ddNote" rows="3" style="width:100%;box-sizing:border-box;margin-top:8px" placeholder="Rough note likho (Roman Urdu/English)... jaise: bukhar 3 din, gala kharab, panadol tds 5 din, cbc karwao, 3 din baad ana"></textarea>
 <div style="margin-top:6px">
 <button class="light" onclick="ddDraft()">🤖 AI Draft Banao</button>
@@ -740,6 +769,33 @@ async function ddSelect(tid){
   }catch(e){}
   if(t.status!=='with_doctor'){try{await sb.from('tokens').update({status:'with_doctor'}).eq('id',t.id)}catch(e){}}
   qs("ddSummary").innerHTML='<strong style="font-size:17px">#'+t.token_number+' '+escapeHtml(t.patients?.full_name||"")+'</strong>'+(t.patients?.age?' | '+t.patients.age+' saal':'')+(t.patients?.gender?' | '+escapeHtml(t.patients.gender):'')+'<br><small>Shikayat: '+escapeHtml(t.visits?.chief_complaint||"--")+'</small><br>'+vitHtml;
+  qs("ddHistory").innerHTML='<small style="color:#64748b">🧠 History load ho rahi hai...</small>';
+  qs("ddHistory").innerHTML=await buildPatientHistoryHtml(t.patient_id,t.visit_id);
+}
+async function buildPatientHistoryHtml(pid,excludeVisitId){
+  try{
+    const [rxq,invq,fuq,vsq]=await Promise.all([
+      sb.from('prescriptions').select('diagnosis,created_at,visit_id,prescription_items(medicine_name,dosage,frequency,duration)').eq('patient_id',pid).order('created_at',{ascending:false}).limit(4),
+      sb.from('invoices').select('total,paid_amount').eq('patient_id',pid).neq('status','paid'),
+      sb.from('followups').select('due_date').eq('patient_id',pid).eq('status','pending'),
+      sb.from('visits').select('id').eq('patient_id',pid)
+    ]);
+    const rx=(rxq.data||[]).filter(r=>r.visit_id!==excludeVisitId);
+    const udhaar=(invq.data||[]).reduce((s,r)=>s+((parseFloat(r.total)||0)-(parseFloat(r.paid_amount)||0)),0);
+    const visits=(vsq.data||[]).length;
+    let h='<div class="list-item" style="border-left:4px solid #6366f1"><strong>🧠 Clinical Memory</strong> <small>('+visits+' visits)</small>';
+    if(udhaar>0)h+='<br><span class="pill" style="background:#fee2e2;color:#991b1b">💰 Purana udhaar: Rs.'+udhaar.toLocaleString()+'</span>';
+    if((fuq.data||[]).length)h+=' <span class="pill" style="background:#fef3c7;color:#92400e">📅 Pending follow-up: '+escapeHtml(fuq.data[0].due_date)+'</span>';
+    if(rx.length){
+      h+='<br><small><strong>Pichle ilaaj:</strong></small>';
+      rx.slice(0,3).forEach(r=>{
+        const meds=(r.prescription_items||[]).map(m=>m.medicine_name).filter(Boolean).join(", ");
+        h+='<small style="display:block;padding-left:10px">• '+new Date(r.created_at).toLocaleDateString()+': '+escapeHtml(r.diagnosis||"--")+(meds?' — '+escapeHtml(meds):'')+'</small>';
+      });
+    }else if(visits<=1){h+='<br><small>Pehli visit — koi purani history nahi.</small>'}
+    h+='</div>';
+    return h;
+  }catch(e){return '<small style="color:#dc2626">History load fail: '+escapeHtml(e.message||String(e))+'</small>'}
 }
 async function ddDraft(){
   const st=qs("ddPanelStatus");const note=qs("ddNote").value.trim();const t=window.DD_SEL;
