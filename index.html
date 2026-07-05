@@ -658,17 +658,20 @@ async function qbComplete(tid){
       const phAmt=(ph.data||[]).reduce((s,r)=>s+(parseFloat(r.amount)||0),0);
       const lbAmt=(lb.data||[]).reduce((s,r)=>s+(parseFloat(r.amount)||0),0);
       const consult=parseFloat(t.fee)||0;
-      const total=consult+phAmt+lbAmt;
-      const alreadyPaidConsult=t.payment_status==='paid'?consult:0;
+      const gross=consult+phAmt+lbAmt;
+      let discount=0;
+      if(gross>0){discount=parseFloat(prompt("🧾 BILL: Consult Rs."+consult+(t.payment_status==='paid'?" (paid)":"")+" + Pharmacy Rs."+phAmt+" + Lab Rs."+lbAmt+" = Rs."+gross+"\nDiscount kitna? (0 = nahi)","0"))||0;if(discount<0)discount=0;if(discount>gross)discount=gross}
+      const total=gross-discount;
+      const alreadyPaidConsult=t.payment_status==='paid'?Math.min(consult,total):0;
       const due=total-alreadyPaidConsult;
       let paidNow=0;
       if(due>0){
-        const ans=prompt("🧾 BILL: Consult Rs."+consult+(t.payment_status==='paid'?" (paid)":"")+" + Pharmacy Rs."+phAmt+" + Lab Rs."+lbAmt+" = Total Rs."+total+"\nAbhi baqaya: Rs."+due+"\nKitna wasool hua? (0 = udhaar)",String(due));
+        const ans=prompt("Total (discount ke baad): Rs."+total+"\nAbhi baqaya: Rs."+due+"\nKitna wasool hua? (0 = udhaar)",String(due));
         paidNow=parseFloat(ans)||0;if(paidNow>due)paidNow=due;
       }
       const totalPaid=alreadyPaidConsult+paidNow;
       const invStatus=totalPaid>=total?'paid':(totalPaid>0?'partial':'unpaid');
-      await sb.from('invoices').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,token_id:t.id,consultation_fee:consult,pharmacy_amount:phAmt,lab_amount:lbAmt,total,paid_amount:totalPaid,status:invStatus,payment_method:t.payment_method||null});
+      await sb.from('invoices').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,token_id:t.id,consultation_fee:consult,pharmacy_amount:phAmt,lab_amount:lbAmt,discount,total,paid_amount:totalPaid,status:invStatus,payment_method:t.payment_method||null});
     }
     const days=prompt("Follow-up kitne din baad? (khaali ya 0 = follow-up nahi)","3");
     const d=parseInt(days);
@@ -983,10 +986,22 @@ async function invcReceive(id){
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">📊 Daily Report</h2>
 <div class="card" id="dailyReportCard">
 <h2>Aaj Ka Hisaab <span class="pill blue">Owner/Billing</span></h2>
-<div style="margin:8px 0"><button class="success" onclick="loadDailyReport()">📊 Aaj Ki Report Nikalo</button> <span id="dailyReportStatus" style="font-size:12px;color:#64748b"></span></div>
+<div style="margin:8px 0"><button class="success" onclick="loadDailyReport()">📊 Aaj Ki Report Nikalo</button> <button class="light" onclick="loadPastReports()">🗂️ Pichli Reports</button> <span id="dailyReportStatus" style="font-size:12px;color:#64748b"></span></div>
 <div id="dailyReportBody"></div>
 </div>
 <script>
+async function loadPastReports(){
+  const st=qs("dailyReportStatus"),body=qs("dailyReportBody");
+  try{
+    if(!window.CLINIC_ORG_ID){st.textContent="Pehle login karo.";return}
+    st.textContent="Loading...";
+    const {data,error}=await sb.from('daily_reports').select('*').eq('organization_id',window.CLINIC_ORG_ID).order('report_date',{ascending:false}).limit(14);
+    if(error)throw error;
+    const rows=data||[];
+    body.innerHTML=rows.length?('<table style="width:100%;border-collapse:collapse;font-size:13px"><tr style="background:#f1f5f9"><th style="text-align:left;padding:6px">Tareekh</th><th style="text-align:right;padding:6px">Patients</th><th style="text-align:right;padding:6px">Bill</th><th style="text-align:right;padding:6px">Wasool</th><th style="text-align:right;padding:6px">Baqaya</th></tr>'+rows.map(r=>'<tr><td style="padding:6px;border-top:1px solid #e2e8f0">'+escapeHtml(r.report_date)+'</td><td style="text-align:right;padding:6px;border-top:1px solid #e2e8f0">'+(r.total_patients||0)+'</td><td style="text-align:right;padding:6px;border-top:1px solid #e2e8f0">Rs.'+(parseFloat(r.total_billed)||0).toLocaleString()+'</td><td style="text-align:right;padding:6px;border-top:1px solid #e2e8f0">Rs.'+(parseFloat(r.total_collected)||0).toLocaleString()+'</td><td style="text-align:right;padding:6px;border-top:1px solid #e2e8f0;color:'+((parseFloat(r.total_pending)||0)>0?'#b45309':'#059669')+'">Rs.'+(parseFloat(r.total_pending)||0).toLocaleString()+'</td></tr>').join("")+'</table>'):"Abhi koi purani report nahi — Daily Report Agent har raat 9:30 pe khud save karega.";
+    st.textContent="Pichle "+rows.length+" din";
+  }catch(e){st.textContent="Error: "+e.message}
+}
 async function loadDailyReport(){
   const st=qs("dailyReportStatus"),body=qs("dailyReportBody");
   try{
