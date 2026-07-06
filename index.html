@@ -986,6 +986,54 @@ async function qbDispense(id){
   }catch(e){alert("Dispense fail: "+e.message)}
 }
 </script>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">💳 Pending Payments</h2>
+<div class="card" id="pendingPaymentsCard">
+<h2>Online Bookings — Payment Verify <span class="pill blue">Manual TID Check</span></h2>
+<div class="api-note">Patient ne paisa bhej kar TID likhi hai. Apne JazzCash/EasyPaisa app mein raqam aur TID check karke <strong>Verify</strong> dabao — token tabhi banega. Ghalat/jaali TID ho to <strong>Reject</strong>.</div>
+<div style="margin:8px 0"><button class="success" onclick="loadPendingPayments()">🔄 Refresh</button> <span id="ppStatus" style="font-size:12px;color:#64748b"></span></div>
+<div id="ppList" style="max-height:340px;overflow:auto">Login karke Refresh dabao.</div>
+</div>
+<script>
+async function loadPendingPayments(){
+  const st=qs('ppStatus'),list=qs('ppList');
+  try{
+    if(!window.CLINIC_ORG_ID){st.textContent='Pehle login karo.';return}
+    st.textContent='Loading...';
+    const {data,error}=await sb.from('bookings').select('*').eq('organization_id',window.CLINIC_ORG_ID).eq('status','pending_payment').order('created_at',{ascending:true});
+    if(error)throw error;
+    const rows=data||[];window.PP_ROWS={};rows.forEach(r=>PP_ROWS[r.id]=r);
+    list.innerHTML=rows.length?rows.map(b=>{
+      const mins=Math.max(0,Math.round((new Date(b.expires_at)-new Date())/60000));
+      return '<div class="list-item" style="border-left:4px solid #0ea5e9"><strong>'+escapeHtml(b.name)+'</strong> | '+escapeHtml(b.phone)+(b.age?' | '+b.age+' saal':'')+'<br><small>'+escapeHtml(b.complaint||'')+'</small><br>💰 <strong>Rs.'+(b.amount||0)+'</strong> — '+escapeHtml(b.payment_method||'--')+' | TID: <strong>'+escapeHtml(b.tid||'--')+'</strong>'+(b.payer_number?' | Bhejne wala: '+escapeHtml(b.payer_number):'')+'<br><small>🕐 '+new Date(b.created_at).toLocaleTimeString()+' | Expiry: '+mins+' min baaki</small><br><button class="success" style="padding:5px 12px;font-size:12.5px" onclick="ppVerify(\''+b.id+'\')">✅ Verified — Token Banao</button> <button class="warning" style="padding:5px 12px;font-size:12.5px" onclick="ppReject(\''+b.id+'\')">❌ Reject</button></div>';
+    }).join(''):'Koi pending payment nahi. 👍';
+    st.textContent='Pending: '+rows.length+' | '+new Date().toLocaleTimeString();
+  }catch(e){st.textContent='Error: '+e.message}
+}
+async function ppVerify(id){
+  const b=window.PP_ROWS&&PP_ROWS[id];if(!b)return;
+  if(!confirm('Aapne apne '+(b.payment_method||'wallet')+' app mein Rs.'+b.amount+' (TID: '+(b.tid||'--')+') check kar li hai?'))return;
+  try{
+    await sb.from('bookings').update({status:'verified',verified_by:window.CLINIC_SESSION.user?.id||null}).eq('id',id);
+    auditLog('payment_verified','bookings',id,{tid:b.tid,amount:b.amount,method:b.payment_method});
+    const resp=await fetch('https://drzaid.app.n8n.cloud/webhook/patient-intake',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:b.phone,name:b.name,age:b.age||null,gender:'',complaint:b.complaint||'Online paid booking',visit_mode:'in_clinic',source:'online_paid',payment_status:'paid',payment_method:b.payment_method||'',fee:b.amount||300})});
+    if(!resp.ok)throw new Error('Token agent error '+resp.status);
+    const r=await resp.json();
+    await sb.from('bookings').update({status:'confirmed',token_id:r.tokenId||null}).eq('id',id);
+    auditLog('token_confirmed_after_payment','tokens',r.tokenId||null,{bookingId:id,tokenNumber:r.tokenNumber});
+    alert('✅ Token #'+r.tokenNumber+' ban gaya ('+b.name+'). Patient "Baari Check" se dekh sakta hai.');
+    loadPendingPayments();if(typeof loadQueueBoard==='function')loadQueueBoard();
+  }catch(e){alert('Verify fail: '+e.message)}
+}
+async function ppReject(id){
+  const b=window.PP_ROWS&&PP_ROWS[id];if(!b)return;
+  if(!confirm('Pakka reject? ('+b.name+', TID: '+(b.tid||'--')+')'))return;
+  try{
+    await sb.from('bookings').update({status:'rejected',verified_by:window.CLINIC_SESSION.user?.id||null}).eq('id',id);
+    auditLog('payment_rejected','bookings',id,{tid:b.tid,amount:b.amount},'denied');
+    loadPendingPayments();
+  }catch(e){alert('Reject fail: '+e.message)}
+}
+</script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">🧾 Invoices & Udhaar</h2>
 <div class="card" id="invoicesCard">
 <h2>Invoices / Udhaar Ledger <span class="pill blue">Combined Billing</span></h2>
@@ -1415,8 +1463,8 @@ const ROLE_ALLOWED_HEADINGS = {
   lab_technician: ['Pharmacy & Lab Queues'],
   vitals_staff: ['Aaj Ki Token Queue','Vitals Screening'],
   nurse: ['Aaj Ki Token Queue','Vitals Screening'],
-  receptionist: ['Patient Intake Agent','Aaj Ki Token Queue','Aaj Ka Hisaab','Invoices / Udhaar Ledger','Aaj Ke Follow-ups','Reception Dashboard','Appointment Booking','Payment / Fee Status','Live Clinic Timeline (All Patients Today)'],
-  billing: ['Aaj Ka Hisaab','Invoices / Udhaar Ledger','Billing Summary','Payment / Fee Status']
+  receptionist: ['Patient Intake Agent','Aaj Ki Token Queue','Aaj Ka Hisaab','Invoices / Udhaar Ledger','Online Bookings — Payment Verify','Aaj Ke Follow-ups','Reception Dashboard','Appointment Booking','Payment / Fee Status','Live Clinic Timeline (All Patients Today)'],
+  billing: ['Aaj Ka Hisaab','Invoices / Udhaar Ledger','Online Bookings — Payment Verify','Billing Summary','Payment / Fee Status']
 };
 function applyRoleBasedView(){
  try{
@@ -3884,6 +3932,7 @@ const CHAT_INTENTS=[
  {k:/hisa+b|report|cash|kamai|aaj ka/i,label:"💰 Hisaab",card:"dailyReportCard",run:()=>{if(typeof loadDailyReport==='function')loadDailyReport()},msg:"Aaj ka hisaab 👇"},
  {k:/follow/i,label:"📅 Follow-ups",card:"followupsCard",run:()=>{if(typeof loadFollowups==='function')loadFollowups()},msg:"Aaj ke follow-ups 👇"},
  {k:/udhaar|invoice|bill|wasool|baqaya/i,label:"🧾 Udhaar",card:"invoicesCard",run:()=>{if(typeof loadInvoices==='function')loadInvoices()},msg:"Invoices/Udhaar 👇"},
+ {k:/pending payment|tid|payment verify|online booking/i,label:"💳 Pending Payments",card:"pendingPaymentsCard",run:()=>{if(typeof loadPendingPayments==='function')loadPendingPayments()},msg:"Online bookings jo verify hone hain 👇"},
  {k:/history|purani|record dhoond|talash/i,label:"🧠 History",card:"cloudHistoryCard",run:()=>{},msg:"Phone/naam se dhoondo 👇"},
  {k:/advance|purana view|full view|sab dikhao/i,label:"⚙️ Purana View",card:null,full:true,run:()=>{qs('chatShell').style.display='none';qs('chatFab').style.display='block'},msg:"Purana poora view khol diya."}
 ];
