@@ -1181,6 +1181,67 @@ async function fuDone(id){
   try{const {error}=await sb.from('followups').update({status:'done'}).eq('id',id);if(error)throw error;loadFollowups()}catch(e){alert("Update fail: "+e.message)}
 }
 </script>
+<h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">🕵️ Audit Viewer</h2>
+<div class="card" id="auditViewerCard">
+<h2>Audit Trail <span class="pill blue">Owner Only</span></h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px;margin:8px 0">
+<input id="avFrom" type="date" style="padding:7px" title="Se">
+<input id="avTo" type="date" style="padding:7px" title="Tak">
+<select id="avUser" style="padding:7px"><option value="">Sab Users</option></select>
+<select id="avEntity" style="padding:7px"><option value="">Sab Modules</option></select>
+<input id="avAction" placeholder="Action search..." style="padding:7px">
+<button class="success" onclick="loadAudit()">🔍 Dekho</button>
+</div>
+<div style="margin:4px 0"><button class="light" style="padding:5px 12px;font-size:12.5px" onclick="avExport()">📋 Copy CSV</button> <span id="avStatus" style="font-size:12px;color:#64748b"></span></div>
+<div id="avList" style="max-height:380px;overflow:auto;font-size:13px"></div>
+</div>
+<script>
+window.AV_ROWS=[];window.AV_PROFILES={};
+async function avInit(){
+  try{
+    const {data:profs}=await sb.from('profiles').select('id,full_name,role').eq('organization_id',window.CLINIC_ORG_ID);
+    (profs||[]).forEach(p=>{AV_PROFILES[p.id]=p});
+    const sel=qs('avUser');sel.innerHTML='<option value="">Sab Users</option>'+(profs||[]).map(p=>'<option value="'+p.id+'">'+escapeHtml(p.full_name)+' ('+p.role+')</option>').join('');
+  }catch(e){}
+}
+async function loadAudit(){
+  const st=qs('avStatus'),list=qs('avList');
+  const role=window.CLINIC_SESSION&&window.CLINIC_SESSION.profile?window.CLINIC_SESSION.profile.role:null;
+  if(!['org_owner','branch_admin','super_admin'].includes(role)){list.innerHTML='<div class="list-item" style="border-left:4px solid #dc2626">Sirf Owner/Admin dekh sakte hain.</div>';return}
+  try{
+    st.textContent='Loading...';
+    if(!Object.keys(AV_PROFILES).length)await avInit();
+    let q=sb.from('audit_logs').select('*').eq('organization_id',window.CLINIC_ORG_ID).order('created_at',{ascending:false}).limit(300);
+    const f=qs('avFrom').value,t=qs('avTo').value,u=qs('avUser').value,en=qs('avEntity').value,ac=qs('avAction').value.trim();
+    if(f)q=q.gte('created_at',f+'T00:00:00');
+    if(t)q=q.lte('created_at',t+'T23:59:59');
+    if(u)q=q.eq('user_id',u);
+    if(en)q=q.eq('entity_type',en);
+    if(ac)q=q.ilike('action','%'+ac+'%');
+    const {data,error}=await q;
+    if(error)throw error;
+    window.AV_ROWS=data||[];
+    const ents=[...new Set(AV_ROWS.map(r=>r.entity_type).filter(Boolean))];
+    const esel=qs('avEntity');const cur=esel.value;
+    esel.innerHTML='<option value="">Sab Modules</option>'+ents.map(e=>'<option'+(e===cur?' selected':'')+'>'+escapeHtml(e)+'</option>').join('');
+    list.innerHTML=AV_ROWS.length?AV_ROWS.map(r=>{
+      const p=AV_PROFILES[r.user_id];
+      const who=p?escapeHtml(p.full_name)+' <small>('+p.role+')</small>':(r.user_id?'<small>'+escapeHtml(String(r.user_id).slice(0,8))+'…</small>':'<small>system/agent</small>');
+      const denied=/denied|fail|error|reject/i.test(r.action||'');
+      const det=r.details?('<br><small style="color:#64748b">'+escapeHtml(JSON.stringify(r.details)).slice(0,180)+'</small>'):'';
+      return '<div class="list-item"'+(denied?' style="border-left:4px solid #dc2626"':'')+'><strong>'+escapeHtml(r.action||'--')+'</strong>'+(r.entity_type?' <span class="pill blue">'+escapeHtml(r.entity_type)+'</span>':'')+(denied?' <span class="pill" style="background:#fee2e2;color:#991b1b">DENIED/FAIL</span>':'')+'<br>👤 '+who+' | 🕐 '+new Date(r.created_at).toLocaleString()+(r.entity_id?' | ID: <small>'+String(r.entity_id).slice(0,8)+'…</small>':'')+det+'</div>';
+    }).join(''):'<div class="list-item">Filters ke mutabiq koi entry nahi. (Audit entries n8n agents likhte hain — jaise jaise system use hoga, yahan aayengi.)</div>';
+    st.textContent='Entries: '+AV_ROWS.length+' | '+new Date().toLocaleTimeString();
+  }catch(e){st.textContent='Error: '+e.message}
+}
+function avExport(){
+  if(!AV_ROWS.length){alert('Pehle Dekho dabao.');return}
+  const rows=[['time','user','role','action','module','entity_id','details']];
+  AV_ROWS.forEach(r=>{const p=AV_PROFILES[r.user_id]||{};rows.push([r.created_at,p.full_name||r.user_id||'system',p.role||'',r.action||'',r.entity_type||'',r.entity_id||'',r.details?JSON.stringify(r.details):''])});
+  const csv=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
+  navigator.clipboard.writeText(csv).then(()=>alert('CSV copy ho gaya — Excel/Sheets mein paste kar lo ('+AV_ROWS.length+' rows).')).catch(()=>alert('Copy fail — browser permission check karo.'));
+}
+</script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">⚙ Settings</h2>
 <div class="card" id="multiAiRouterCard"><h2>AI Provider Settings <span class="pill blue">Multi-AI</span></h2>
 <div class="api-note"><strong>Important:</strong> Gemini n8n proxy ke through secure hai (koi key nahi chahiye). Baaki providers ke liye browser-saved API key sirf personal/local testing ke liye hai.</div>
@@ -1335,7 +1396,7 @@ function applyRoleBasedView(){
   if(!role) return;
   const lb=document.getElementById('logoutBtnFixed');
   if(lb&&window.CLINIC_SESSION.profile)lb.textContent=(window.CLINIC_SESSION.profile.full_name||'')+' ('+role+') | Logout';
-  if(ROLE_VIEW_ALWAYS_FULL.includes(role)||role==='doctor'){try{if(qs('dmFab'))qs('dmFab').style.display='block';if(role==='doctor')dmOpen()}catch(e){}return}
+  if(ROLE_VIEW_ALWAYS_FULL.includes(role)||role==='doctor'){try{if(qs('dmFab'))qs('dmFab').style.display='block';if(role==='doctor'){dmOpen();const av=qs('auditViewerCard');if(av){av.style.display='none';const h=av.previousElementSibling;if(h&&h.tagName==='H2')h.style.display='none'}}}catch(e){}return}
   const allowed = ROLE_ALLOWED_HEADINGS[role];
   if(!allowed||!allowed.length)return;
   const cards=Array.from(document.querySelectorAll('.card'));
