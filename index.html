@@ -643,21 +643,33 @@ async function loadQueueBoard(){
     if(!window.CLINIC_ORG_ID){st.textContent="Pehle login karo.";return}
     st.textContent="Loading...";
     const today=new Date();today.setHours(0,0,0,0);
-    const {data:tokens,error}=await sb.from('tokens').select('id,token_number,status,payment_status,payment_method,fee,visit_id,patient_id,priority,patients(full_name,age),visits(chief_complaint)').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()).not('status','in','("completed","cancelled","no_show")').order('token_number');
+    const {data:tokens,error}=await sb.from('tokens').select('id,token_number,status,payment_status,payment_method,fee,source,visit_id,patient_id,priority,patients(full_name,age),visits(chief_complaint)').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()).not('status','in','("completed","cancelled","no_show")').order('token_number');
     if(error)throw error;
     const rows=tokens||[];window.QB_ROWS={};rows.forEach(r=>QB_ROWS[r.id]=r);
     list.innerHTML=rows.length?rows.map(t=>{
       const nx=QB_NEXT[t.status];
-      const payBadge=t.payment_status==='paid'?'<span class="pill green">Paid Rs.'+(t.fee||0)+'</span>':'<span class="pill" style="background:#fef3c7;color:#92400e">'+escapeHtml(t.payment_status)+' Rs.'+(t.fee||0)+'</span>';
+      const isOnlineUnpaid=(t.source==='online'&&t.payment_status!=='paid');
+      const payBadge=t.payment_status==='paid'?'<span class="pill green">Paid Rs.'+(t.fee||0)+'</span>':(isOnlineUnpaid?'<span class="pill" style="background:#fee2e2;color:#991b1b">🌐 ONLINE — Pehle Fee Lo (bogus ho sakta hai)</span>':'<span class="pill" style="background:#fef3c7;color:#92400e">'+escapeHtml(t.payment_status)+' Rs.'+(t.fee||0)+'</span>');
       let btns='';
       if(nx){btns=nx.action==='vitals'?'<button class="light" style="padding:4px 10px;font-size:12.5px" onclick="qbShowVitals(\''+t.id+'\')">'+nx.label+'</button>':(nx.action==='complete'?'<button class="success" style="padding:4px 10px;font-size:12.5px" onclick="qbComplete(\''+t.id+'\')">'+nx.label+'</button>':'<button class="success" style="padding:4px 10px;font-size:12.5px" onclick="qbSetStatus(\''+t.id+'\',\''+nx.status+'\')">'+nx.label+'</button>')}
-      btns+=' <button class="warning" style="padding:4px 8px;font-size:11.5px" onclick="qbSetStatus(\''+t.id+'\',\'cancelled\')">✖</button>';
+      if(t.payment_status!=='paid')btns=' <button class="success" style="padding:4px 10px;font-size:12.5px" onclick="qbConfirmPay(\''+t.id+'\')">💵 Fee Confirm</button> '+(isOnlineUnpaid?'':btns);
+      btns+=' <button class="warning" style="padding:4px 8px;font-size:11.5px" onclick="qbSetStatus(\''+t.id+'\',\'cancelled\')">✖ No-Show</button>';
       return '<div class="list-item"'+(t.priority!=='normal'?' style="border-left:4px solid #dc2626"':'')+'><strong style="font-size:17px">#'+t.token_number+'</strong> <strong>'+escapeHtml(t.patients?.full_name||"--")+'</strong>'+(t.patients?.age?' ('+t.patients.age+')':'')+' '+payBadge+'<br><small>'+escapeHtml(t.visits?.chief_complaint||"--")+' | Status: <strong>'+escapeHtml(t.status)+'</strong></small><br>'+btns+'<div id="qbVitals_'+t.id+'" style="display:none;margin-top:6px;background:#f1f5f9;border-radius:8px;padding:8px"><input id="qv_bp_'+t.id+'" placeholder="BP (120/80)" style="width:90px;padding:5px;margin:2px"><input id="qv_pulse_'+t.id+'" placeholder="Pulse" style="width:60px;padding:5px;margin:2px"><input id="qv_temp_'+t.id+'" placeholder="Temp °F" style="width:70px;padding:5px;margin:2px"><input id="qv_spo2_'+t.id+'" placeholder="SpO2" style="width:60px;padding:5px;margin:2px"><input id="qv_wt_'+t.id+'" placeholder="Wzn kg" style="width:65px;padding:5px;margin:2px"><button class="success" style="padding:5px 10px;font-size:12px" onclick="qbSaveVitals(\''+t.id+'\',\''+t.visit_id+'\',\''+t.patient_id+'\')">💾 Save Vitals</button></div></div>';
     }).join(""):"Aaj koi active token nahi.";
     st.textContent="Active tokens: "+rows.length+" | "+new Date().toLocaleTimeString();
   }catch(e){st.textContent="Error: "+e.message}
 }
 function qbShowVitals(tid){const d=qs("qbVitals_"+tid);if(d)d.style.display=d.style.display==="none"?"block":"none"}
+async function qbConfirmPay(tid){
+  try{
+    const t=window.QB_ROWS&&QB_ROWS[tid];if(!t)return;
+    const fee=parseFloat(prompt("Fee kitni wasool hui? (Rs)",String(t.fee||500)))||0;
+    if(fee<=0)return;
+    const method=prompt("Tareeqa? (Cash/JazzCash/EasyPaisa/Card)","Cash")||"Cash";
+    const {error}=await sb.from('tokens').update({payment_status:'paid',payment_method:method,fee}).eq('id',tid);
+    if(error)throw error;loadQueueBoard();
+  }catch(e){alert("Fail: "+e.message)}
+}
 async function qbSetStatus(tid,status){
   try{const {error}=await sb.from('tokens').update({status}).eq('id',tid);if(error)throw error;loadQueueBoard()}catch(e){alert("Update fail: "+e.message)}
 }
