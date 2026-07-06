@@ -101,13 +101,15 @@ const GEMINI_URL="https://drzaid.app.n8n.cloud/webhook/gemini-ai";
 const STATUS_URL2="https://drzaid.app.n8n.cloud/webhook/queue-status";
 // ====== CLINIC KNOWLEDGE (Dr. Zaid: yahan apni asal maloomat likh dein) ======
 const CLINIC_INFO={
-  name:"Dr. Zaid Clinic",
+  name:"Dr. Zaid Shafique Clinic",
   doctor:"Dr. Zaid Shafique",
-  timing:"Clinic timings ke liye baraah-e-karam clinic par maloom karein", // e.g. "Rozana shaam 6 se 10 baje (Jumma band)"
-  fee:"OPD fee counter par maloom hogi", // e.g. "Rs. 1000"
-  location:"Location/address clinic se maloom karein", // e.g. "Main Bazar, Pattoki"
-  contact:"", // e.g. "0300-1234567"
-  services:"General OPD check-up, prescriptions, lab tests, pharmacy",
+  timing:"Rozana shaam 4:00 baje se 8:00 baje tak",
+  fee:"Routine consultation fee: Rs. 300",
+  emergencyFee:"Urgent consultation fee: Rs. 1000 (sirf urgent check-up ke liye, jab doctor sahib available hon — ye hospital ki emergency ka mutabaadil NAHI hai)",
+  onlineCheckup:"Online checkup doctor sahib ki availability ke mutabiq available hai — appointment ke liye call karein: 0327-4845413",
+  location:"Dr. Zaid Shafique Clinic, Main Bazar, Purani Mandi, Pattoki",
+  contact:"Appointment: 0327-4845413 | Personal: 0303-4846161",
+  services:"General OPD check-up, online checkup (availability ke mutabiq), prescriptions, lab tests, pharmacy",
   tokenProcess:"Isi page par neeche 'Online Token Lein' se, ya mujhse chat mein 'token chahiye' likh kar.",
   queueProcess:"Neeche 'Apni Baari Check Karein' mein apna number daalein, ya mujhse 'baari check' likh kar."
 };
@@ -126,6 +128,7 @@ function pcIntent(v){
   if(/fee|fees|kitne paise|charges|kharcha/i.test(v))return 'fee';
   if(/kahan|location|address|jagah|pata/i.test(v))return 'location';
   if(/contact|number|phone|call/i.test(v)&&!/token/i.test(v))return 'contact';
+  if(/online.{0,12}(checkup|check up|consult)|video (call|consult)|ghar (se|baithe).{0,15}checkup/i.test(v))return 'online';
   if(/service|kya kya|ilaaj hota|kaunse test/i.test(v))return 'services';
   if(/doctor (kaun|ka naam)/i.test(v))return 'doctor';
   return 'medical_or_unknown';
@@ -156,16 +159,17 @@ async function pcSend(){
     if(intent==='token'){if(PC.ctx.phone&&PC.ctx.name&&PC.ctx.complaint){PC.mode='book';pcSendFake()}else if(PC.ctx.phone){PC.mode=PC.ctx.name?'complaint':'name';pcBubble(PC.ctx.name?'Kya masla/shikayat hai?':'Apna <strong>poora naam</strong> batayein:','a')}else{PC.mode='phone';pcBubble('Zaroor! Apna <strong>mobile number</strong> (03xxxxxxxxx):','a')}return}
     if(intent==='queue'){if(PC.ctx.phone){await pcQueueCheck()}else{PC.mode='queuephone';pcBubble('Apna <strong>mobile number</strong> batayein, baari check karta hoon:','a')}return}
     if(intent==='timing'){pcBubble('🕐 '+CLINIC_INFO.timing+(CLINIC_INFO.contact?'<br>📞 '+CLINIC_INFO.contact:''),'a');return}
-    if(intent==='fee'){pcBubble('💰 '+CLINIC_INFO.fee+'. Online token ki fee bhi clinic counter par ada hogi.','a');return}
+    if(intent==='fee'){pcBubble('💰 '+CLINIC_INFO.fee+'<br>🔶 '+CLINIC_INFO.emergencyFee+'<br><small>⚠️ Jaan-lewa emergency (chest pain, shadeed bleeding waghera) mein foran hospital emergency jayen — fee/token ka intezar na karein.</small>','a');return}
     if(intent==='location'){pcBubble('📍 '+CLINIC_INFO.location+(CLINIC_INFO.contact?'<br>📞 '+CLINIC_INFO.contact:''),'a');return}
     if(intent==='contact'){pcBubble('📞 '+(CLINIC_INFO.contact||'Contact number clinic ke board/parchi par maujood hai.'),'a');return}
+    if(intent==='online'){pcBubble('💻 '+CLINIC_INFO.onlineCheckup,'a');return}
     if(intent==='services'){pcBubble('🏥 '+CLINIC_INFO.services+'<br>Token: '+CLINIC_INFO.tokenProcess,'a');return}
     if(intent==='doctor'){pcBubble('👨‍⚕️ '+CLINIC_INFO.doctor+' — '+CLINIC_INFO.name,'a');return}
 
     // Medical/general -> Gemini with safety + session context; fallback safe
     pcBubble('<em>soch raha hoon...</em>','a');
     const ctxStr='Session context: name='+(PC.ctx.name||'?')+', age='+(PC.ctx.age||'?')+', complaint='+(PC.ctx.complaint||'?')+', lastIntent='+(PC.ctx.lastIntent||'-');
-    const prompt='You are the patient assistant of '+CLINIC_INFO.name+' (Pakistan), doctor: '+CLINIC_INFO.doctor+'. Reply in short simple Roman Urdu (or Urdu script if user wrote Urdu), max 3-4 sentences. STRICT SAFETY RULES: You may give general health education, simple home-care basics (rest, fluids, hygiene), and guidance on WHEN to see the doctor or go to emergency. You must NEVER: confirm a diagnosis, name antibiotics or any specific medicine, give any dose, advise injections, interpret lab reports finally, or casually reassure possible emergencies. If the question needs treatment, say: "Behtar hai token le kar doctor sahib se check karwa lein" and mention they can write "token chahiye". If user language hints emergency (chest pain, severe bleeding, unconsciousness, fits, pregnancy bleeding, child not feeding), tell them to go to emergency immediately. Clinic info: timing='+CLINIC_INFO.timing+'; fee='+CLINIC_INFO.fee+'. '+ctxStr+' . Patient message: '+v;
+    const prompt='You are the patient assistant of '+CLINIC_INFO.name+' (Pakistan), doctor: '+CLINIC_INFO.doctor+'. Reply in short simple Roman Urdu (or Urdu script if user wrote Urdu), max 3-4 sentences. STRICT SAFETY RULES: You may give general health education, simple home-care basics (rest, fluids, hygiene), and guidance on WHEN to see the doctor or go to emergency. You must NEVER: confirm a diagnosis, name antibiotics or any specific medicine, give any dose, advise injections, interpret lab reports finally, or casually reassure possible emergencies. If the question needs treatment, say: "Behtar hai token le kar doctor sahib se check karwa lein" and mention they can write "token chahiye". If user language hints emergency (chest pain, severe bleeding, unconsciousness, fits, pregnancy bleeding, child not feeding), tell them to go to emergency immediately. Clinic info: timing='+CLINIC_INFO.timing+'; routine fee=Rs.300; urgent consultation fee=Rs.1000 (ONLY for urgent consultation when doctor available); address='+CLINIC_INFO.location+'; appointment number 0327-4845413. HARD RULE: NEVER present the Rs.1000 urgent fee as an alternative to hospital emergency care - for any red-flag emergency the ONLY advice is to go to the nearest emergency department immediately. Use ONLY these exact details, never invent other timings/fees/contacts. '+ctxStr+' . Patient message: '+v;
     try{
       const r=await fetch(GEMINI_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.3,maxOutputTokens:250}})});
       const d=await r.json();
