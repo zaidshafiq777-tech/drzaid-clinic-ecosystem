@@ -48,6 +48,12 @@ button:disabled{opacity:.6}
     <input id="bkName" placeholder="Poora naam">
     <input id="bkAge" placeholder="Umar (saal)" inputmode="numeric">
     <textarea id="bkComplaint" rows="2" placeholder="Masla / shikayat (jaise: bukhar 2 din se)"></textarea>
+    <div id="bkPayBox" style="background:#ecfdf5;border:1px solid #10b981;border-radius:10px;padding:10px;margin-bottom:8px;font-size:13.5px">
+      💰 <strong>Advance fee Rs. 300</strong> — <strong id="bkPayNum"></strong> par <strong>JazzCash ya EasyPaisa</strong> se bhejein, phir neeche <strong>Transaction ID (TID)</strong> likhein. Reception verify karegi, phir token milega (30 min ke andar TID na aayi to booking khud cancel).
+    </div>
+    <select id="bkMethod" style="width:100%;padding:11px 12px;border:1px solid #cbd5e1;border-radius:9px;font-size:15px;margin-bottom:8px"><option value="JazzCash">JazzCash</option><option value="EasyPaisa">EasyPaisa</option></select>
+    <input id="bkTid" placeholder="Transaction ID (TID) — payment ke baad milti hai">
+    <input id="bkPayer" placeholder="Jis number se paisa bheja (03xxxxxxxxx)" inputmode="tel">
     <button id="bkBtn" onclick="bookToken()">Token Hasil Karein</button>
     <div id="bkRes" class="res"></div>
   </div>
@@ -71,13 +77,26 @@ async function bookToken(){
   const cm=document.getElementById('bkComplaint').value.trim();
   const btn=document.getElementById('bkBtn'),res=document.getElementById('bkRes');
   if(ph.length<10||!nm){show(res,'err','Sahi mobile number aur naam zaroor likhein.');return}
-  btn.disabled=true;btn.textContent='Token ban raha hai...';
+  if(RED_FLAGS.test(cm)){show(res,'err','🚨 Ye emergency ho sakti hai — foran qareebi emergency/hospital jayen. Online token/payment ka intezar na karein.');return}
+  btn.disabled=true;btn.textContent='Bhej raha hoon...';
   try{
-    const r=await fetch(INTAKE_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:ph,name:nm,age:ag,gender:'',complaint:cm||'Online booking',visit_mode:'in_clinic',source:'online',payment_status:'unpaid'})});
-    if(!r.ok)throw new Error('Server error '+r.status);
-    const d=await r.json();
-    show(res,'ok','<div class="big">🎫 Token #'+d.tokenNumber+'</div>'+nm+' — aapka token ban gaya!<br><small>Clinic tashreef layen; fee counter par ada hogi.</small>');
-    document.getElementById('stPhone').value=ph;
+    if(paymentFirstBookingEnabled){
+      const tid=document.getElementById('bkTid').value.trim();
+      const payer=document.getElementById('bkPayer').value.replace(/[^0-9+]/g,'');
+      const method=document.getElementById('bkMethod').value;
+      if(!tid){show(res,'err','Pehle Rs. 300 '+payNumber()+' par bhejein, phir <strong>TID</strong> yahan likhein — TID ke baghair booking nahi hoti.');btn.disabled=false;btn.textContent='Token Hasil Karein';return}
+      const r=await fetch(BOOKING_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:nm,phone:ph,age:ag,complaint:cm||'Online booking',amount:PAYMENT_CONFIG.AMOUNT,payment_method:method,tid:tid,payer_number:payer})});
+      if(!r.ok)throw new Error('Server error '+r.status);
+      const d=await r.json();
+      show(res,'ok','⏳ <strong>Booking pending hai</strong> ('+nm+').<br>Reception aapki TID verify karegi — verify hote hi token ban jayega, jo aap neeche <strong>"Apni Baari Check Karein"</strong> se dekh lenge.<br><small>Agar 30 minute mein verify na ho to booking cancel ho jayegi aur raqam clinic se refund/adjust karayi ja sakti hai.</small>');
+      document.getElementById('stPhone').value=ph;
+    }else{
+      const r=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:ph,name:nm,age:ag,gender:'',complaint:cm||'Online booking',visit_mode:'in_clinic',source:'online',payment_status:'unpaid'})});
+      if(!r.ok)throw new Error('Server error '+r.status);
+      const d=await r.json();
+      show(res,'ok','<div class="big">🎫 Token #'+d.tokenNumber+'</div>'+nm+' — token ban gaya! Clinic tashreef layen, fee counter par.');
+      document.getElementById('stPhone').value=ph;
+    }
   }catch(e){show(res,'err','Maazrat, masla aa gaya: '+e.message+'<br>Dobara koshish karein ya clinic call karein.')}
   btn.disabled=false;btn.textContent='Token Hasil Karein';
 }
@@ -113,11 +132,21 @@ const CLINIC_INFO={
   tokenProcess:"Isi page par neeche 'Online Token Lein' se, ya mujhse chat mein 'token chahiye' likh kar.",
   queueProcess:"Neeche 'Apni Baari Check Karein' mein apna number daalein, ya mujhse 'baari check' likh kar."
 };
+// ====== PAYMENT-FIRST CONFIG (Sprint 16-A: manual TID verification — koi API integration NAHI) ======
+const PAYMENT_CONFIG={
+  PAYMENT_NUMBER:"TO_BE_CONFIGURED", // dedicated number milne pe yahan likhein
+  DISPLAY_NUMBER:"0303-4846161",      // jab tak dedicated nahi, ye display hota hai
+  PAYMENT_METHODS:["JazzCash","EasyPaisa"],
+  AMOUNT:300
+};
+const paymentFirstBookingEnabled=true; // OFF karo to purana free-token flow wapas
+function payNumber(){return PAYMENT_CONFIG.PAYMENT_NUMBER==="TO_BE_CONFIGURED"?PAYMENT_CONFIG.DISPLAY_NUMBER:PAYMENT_CONFIG.PAYMENT_NUMBER}
+const BOOKING_URL="https://drzaid.app.n8n.cloud/webhook/booking-create";
 const RED_FLAGS=/chest pain|seenay (mein|me) dard|dil ka dard|saans (nahi|band|mushkil|phool)|breathing (difficulty|problem)|behosh|unconscious|bleeding|khoon (beh|aa raha)|pregnan\w*.{0,20}(bleed|khoon)|(bleed|khoon).{0,20}pregnan\w*|hamal.{0,15}khoon|fits|seizure|jhatkay|mirgi|stroke|falij|dehydrat|sukhat|(bacha|bachi|baby).{0,25}(doodh|feed).{0,15}(nahi|na)|khudkushi|suicide|self.?harm|khud ko (maarna|nuqsan)/i;
 const DOSE_BLOCK=/antibiotic|dose|dosage|khuraak|injection.{0,15}(kaunsa|kya|dose)|(kaunsi|konsi) (dawa|medicine|goli)|medicine (ka naam|batao)|tablet batao/i;
 let PC={mode:'free',ctx:{name:null,age:null,phone:null,complaint:null,duration:null,fever:null,redFlag:false,lastIntent:null,tokenNumber:null}};
 function pcBubble(t,who){const c=document.getElementById('pcMsgs');const d=document.createElement('div');d.style.cssText='margin:5px 0;display:flex;justify-content:'+(who==='user'?'flex-end':'flex-start');d.innerHTML='<div style="max-width:85%;padding:8px 11px;border-radius:11px;background:'+(who==='user'?'#095c40;color:#fff':'#fff;border:1px solid #d1fae5')+'">'+t+'</div>';c.appendChild(d);c.scrollTop=c.scrollHeight}
-window.addEventListener('load',()=>{pcBubble('Assalam o Alaikum! 🌙 Main '+CLINIC_INFO.name+' ka assistant hoon. Aap se timing, fee, token, baari — kuch bhi pooch sakte hain. Sehat ka sawal ho to rehnumai karunga, ilaaj doctor sahib hi karenge.','a')});
+window.addEventListener('load',()=>{try{var pn=document.getElementById('bkPayNum');if(pn)pn.textContent=payNumber();if(!paymentFirstBookingEnabled){var pb=document.getElementById('bkPayBox');if(pb)pb.style.display='none';document.getElementById('bkMethod').style.display='none';document.getElementById('bkTid').style.display='none';document.getElementById('bkPayer').style.display='none'}}catch(e){}pcBubble('Assalam o Alaikum! 🌙 Main '+CLINIC_INFO.name+' ka assistant hoon. Aap se timing, fee, token, baari — kuch bhi pooch sakte hain. Sehat ka sawal ho to rehnumai karunga, ilaaj doctor sahib hi karenge.','a')});
 function pcEmergency(){PC.ctx.redFlag=true;pcBubble('🚨 <strong>Ye emergency ho sakti hai.</strong> Baraah-e-karam <strong>foran qareebi emergency/hospital jayen — online token ka intezar na karein.</strong><br><small>Aap clinic se raabta bhi kar sakte hain, lekin emergency ilaaj mein dair na karein.</small>','a')}
 function pcIntent(v){
   if(RED_FLAGS.test(v))return 'emergency';
@@ -142,14 +171,28 @@ async function pcSend(){
     if(PC.mode==='name'){PC.ctx.name=v;PC.mode=PC.ctx.complaint?'book':'complaint';if(PC.mode==='complaint'){pcBubble('Kya <strong>masla/shikayat</strong> hai?','a');return}}
     if(PC.mode==='complaint'){if(RED_FLAGS.test(v)){pcEmergency();PC.mode='free';return}PC.ctx.complaint=v;PC.mode='book'}
     if(PC.mode==='book'){
+      if(paymentFirstBookingEnabled){
+        PC.mode='tid';
+        pcBubble('💰 Token confirm karne ke liye <strong>Rs. '+PAYMENT_CONFIG.AMOUNT+'</strong> advance bhejein:<br>📱 <strong>'+payNumber()+'</strong> (JazzCash ya EasyPaisa)<br>Payment ke baad jo <strong>Transaction ID (TID)</strong> mile wo yahan likh dein. <small>(30 min ke andar — warna booking cancel ho jati hai)</small>','a');
+        return;
+      }
       pcBubble('<em>Token ban raha hai...</em>','a');
       const r=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:PC.ctx.phone,name:PC.ctx.name,age:PC.ctx.age,gender:'',complaint:PC.ctx.complaint,visit_mode:'in_clinic',source:'online_chatbot',payment_status:'unpaid'})});
       const d=await r.json();const c=document.getElementById('pcMsgs');c.removeChild(c.lastChild);
       PC.ctx.tokenNumber=d.tokenNumber;
       pcBubble('<div class="big">🎫 Token #'+d.tokenNumber+'</div>'+PC.ctx.name+' — token ban gaya! Clinic tashreef layen, fee counter par. "baari check" likh kar position dekh sakte hain.','a');
       document.getElementById('stPhone').value=PC.ctx.phone;
-      // TODO(audit): patient portal anonymous hai - server-side agent timeline mein log karta hai; authenticated audit helper yahan laga nahi sakta
       PC.mode='free';PC.ctx.lastIntent='token';return;
+    }
+    if(PC.mode==='tid'){
+      const tid=v.trim();
+      if(tid.length<4){pcBubble('TID sahi nahi lag rahi — payment ke baad SMS/app mein jo Transaction ID aayi wo likhein. (Cancel karna ho to "cancel" likhein)','a');if(/cancel/i.test(v)){PC.mode='free'}return}
+      pcBubble('<em>Booking bhej raha hoon...</em>','a');
+      const r=await fetch(BOOKING_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:PC.ctx.name,phone:PC.ctx.phone,age:PC.ctx.age,complaint:PC.ctx.complaint,amount:PAYMENT_CONFIG.AMOUNT,payment_method:'JazzCash/EasyPaisa',tid:tid,payer_number:PC.ctx.phone})});
+      const d=await r.json();const c=document.getElementById('pcMsgs');c.removeChild(c.lastChild);
+      pcBubble('⏳ <strong>Booking pending hai</strong> — reception aapki TID verify karegi, phir token confirm hoga. "baari check" likh kar dekh sakte hain (verify ke baad token wahan dikhega).','a');
+      document.getElementById('stPhone').value=PC.ctx.phone;
+      PC.mode='free';PC.ctx.lastIntent='token_paid';return;
     }
     if(PC.mode==='queuephone'){const ph=v.replace(/[^0-9+]/g,'');if(ph.length<10){pcBubble('Poora number likhein:','a');return}PC.ctx.phone=ph;PC.mode='free';await pcQueueCheck();return}
 
