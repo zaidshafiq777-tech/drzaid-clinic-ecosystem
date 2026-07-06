@@ -163,6 +163,14 @@
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlqY3hoeHN4bHZyY3JzYmloYnBvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MjMyMjYsImV4cCI6MjA5ODM5OTIyNn0.ZAA_jdUVlfAimtIuJXu_X9oHR4Ybl8OVshmuc2MP84M";
   const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   window.CLINIC_SESSION = { user: null, profile: null };
+  window.auditLog = function(action, entity_type, entity_id, details, status){
+    try{
+      if(!window.CLINIC_ORG_ID || !window.CLINIC_SESSION || !window.CLINIC_SESSION.user) return;
+      var d = Object.assign({}, details||{}, {role:(window.CLINIC_SESSION.profile&&window.CLINIC_SESSION.profile.role)||null, status:status||'ok'});
+      sb.from('audit_logs').insert({organization_id:window.CLINIC_ORG_ID, user_id:window.CLINIC_SESSION.user.id, action:action, entity_type:entity_type||null, entity_id:entity_id||null, details:d})
+        .then(function(r){ if(r.error) console.warn('[Audit]', r.error.message); });
+    }catch(e){ console.warn('[Audit]', e); }
+  };
 </script>
 <style>
   #authGateOverlay{position:fixed;inset:0;background:#0f172a;z-index:99999;display:flex;align-items:center;justify-content:center;font-family:inherit}
@@ -212,6 +220,7 @@ async function clinicLogin(){
     await cloudSyncOnLogin();
     applyRoleBasedView();
     try{chatShellOpen()}catch(e){}
+    try{auditLog('login','auth',null,{})}catch(e){}
     msg.textContent='Welcome, '+(profile.full_name||email)+' ('+profile.role+')';
     setTimeout(()=>{
       document.getElementById('authGateOverlay').style.display='none';
@@ -590,6 +599,7 @@ async function agiAnswer(val,label){
    const resp=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phone:AGI.data.phone,name:AGI.data.name,age:AGI.data.age||null,gender:AGI.data.gender||"",complaint:AGI.data.complaint,visit_mode:AGI.data.visit_mode,source:AGI.data.priority==="emergency"?"emergency":"reception",priority:AGI.data.priority||"normal",payment_status:AGI.data.payment_status,payment_method:AGI.data.method||"",fee:AGI.data.fee||0})});
    if(!resp.ok)throw new Error("Agent error "+resp.status);
    const r=await resp.json();
+   auditLog('token_created_reception','tokens',r.tokenId||null,{tokenNumber:r.tokenNumber,payment_status:AGI.data.payment_status,method:AGI.data.method});
    agiAsk('<div style="border-left:4px solid #059669;padding-left:10px"><strong style="font-size:22px">🎫 Token #'+escapeHtml(String(r.tokenNumber))+'</strong><br>'+escapeHtml(AGI.data.name)+" | "+escapeHtml(AGI.data.complaint)+"<br>💰 Rs. "+AGI.data.fee+" — "+escapeHtml(AGI.data.method)+" ("+(AGI.data.payment_status==="paid"?"✅ Paid":"🕐 Udhaar")+')<br><small>Patient queue mein shamil ho gaya.</small></div>',[{label:"➕ Agla patient",value:"__restart__"}]);
    AGI.step="done";break}
   case "done":{if(val==="__restart__")agiStart();break}
@@ -671,7 +681,7 @@ async function qbConfirmPay(tid){
   }catch(e){alert("Fail: "+e.message)}
 }
 async function qbSetStatus(tid,status){
-  try{const {error}=await sb.from('tokens').update({status}).eq('id',tid);if(error)throw error;loadQueueBoard()}catch(e){alert("Update fail: "+e.message)}
+  try{const {error}=await sb.from('tokens').update({status}).eq('id',tid);if(error)throw error;auditLog('token_status_changed','tokens',tid,{status});loadQueueBoard()}catch(e){auditLog('token_status_changed','tokens',tid,{status,error:e.message},'failed');alert("Update fail: "+e.message)}
 }
 async function qbComplete(tid){
   try{
@@ -697,13 +707,15 @@ async function qbComplete(tid){
       }
       const totalPaid=alreadyPaidConsult+paidNow;
       const invStatus=totalPaid>=total?'paid':(totalPaid>0?'partial':'unpaid');
-      await sb.from('invoices').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,token_id:t.id,consultation_fee:consult,pharmacy_amount:phAmt,lab_amount:lbAmt,discount,total,paid_amount:totalPaid,status:invStatus,payment_method:t.payment_method||null});
+      const invIns=await sb.from('invoices').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,token_id:t.id,consultation_fee:consult,pharmacy_amount:phAmt,lab_amount:lbAmt,discount,total,paid_amount:totalPaid,status:invStatus,payment_method:t.payment_method||null}).select('id').single();
+      auditLog('invoice_generated','invoices',invIns.data?invIns.data.id:null,{total:total,paid:totalPaid,discount:discount,status:invStatus});
     }
     const days=prompt("Follow-up kitne din baad? (khaali ya 0 = follow-up nahi)","3");
     const d=parseInt(days);
     if(d&&d>0&&t){
       const due=new Date();due.setDate(due.getDate()+d);
       await sb.from('followups').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,due_date:due.toISOString().slice(0,10),reason:(t.visits&&t.visits.chief_complaint)||null,status:'pending'});
+      auditLog('followup_scheduled','followups',null,{days:d,tokenId:tid});
     }
     const {error}=await sb.from('tokens').update({status:'completed'}).eq('id',tid);if(error)throw error;
     loadQueueBoard();if(typeof loadFollowups==='function')loadFollowups();
@@ -721,6 +733,7 @@ async function qbSaveVitals(tid,vid,pid){
     const {error}=await sb.from('vitals').insert({organization_id:window.CLINIC_ORG_ID,visit_id:vid,patient_id:pid,bp:bp||null,pulse,temperature:temp,spo2,weight:wt,is_abnormal:abnormal,recorded_by:window.CLINIC_SESSION.user?.id||null});
     if(error)throw error;
     await sb.from('tokens').update({status:'vitals_done'}).eq('id',tid);
+    auditLog('vitals_saved','tokens',tid,{abnormal:abnormal});
     if(abnormal)alert("⚠️ ABNORMAL VITALS — Doctor ko turant batao!");
     loadQueueBoard();
   }catch(e){alert("Vitals save fail: "+e.message)}
@@ -849,6 +862,7 @@ async function ddApprove(){
     if(error)throw error;
     const meds=(d.medicines||[]).filter(m=>m.name).map(m=>({prescription_id:rx.id,medicine_name:m.name,dosage:m.dosage||null,frequency:m.frequency||null,duration:m.duration||null}));
     if(meds.length)await sb.from('prescription_items').insert(meds);
+    auditLog('prescription_approved','prescriptions',rx.id,{medicines:meds.length,diagnosis:d.diagnosis||null});
     const resp=await fetch("https://drzaid.app.n8n.cloud/webhook/prescription-approved",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prescriptionId:rx.id})});
     const r=await resp.json().catch(()=>({}));
     if(d.follow_up_days&&d.follow_up_days>0){const due=new Date();due.setDate(due.getDate()+d.follow_up_days);await sb.from('followups').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,due_date:due.toISOString().slice(0,10),reason:d.diagnosis||t.visits?.chief_complaint||null,status:'pending'})}
@@ -935,6 +949,7 @@ async function qbLabComplete(id){
     const price=parseFloat(prompt("Test ka price (Rs, 0 = free):","0"))||0;
     const {error}=await sb.from('lab_queue').update({status:'completed',result:res||null,amount:price}).eq('id',id);
     if(error)throw error;
+    auditLog('lab_completed','lab_queue',id,{price:price,hasResult:!!res});
     cloudLoadQueues();
   }catch(e){alert("Update fail: "+e.message)}
 }
@@ -965,7 +980,7 @@ async function qbDispense(id){
       }
       window.__lastDispenseAmount=amount;
     }
-    const {error}=await sb.from('pharmacy_queue').update({status:'dispensed',amount:window.__lastDispenseAmount||0}).eq('id',id);window.__lastDispenseAmount=0;
+    const {error}=await sb.from('pharmacy_queue').update({status:'dispensed',amount:window.__lastDispenseAmount||0}).eq('id',id);auditLog('pharmacy_dispensed','pharmacy_queue',id,{qty:qty,medicine:row.medicine_name,amount:window.__lastDispenseAmount||0});window.__lastDispenseAmount=0;
     if(error)throw error;
     cloudLoadQueues();if(typeof loadInventory==='function')loadInventory();
   }catch(e){alert("Dispense fail: "+e.message)}
@@ -1005,7 +1020,7 @@ async function invcReceive(id){
     const newPaid=(parseFloat(v.paid_amount)||0)+Math.min(amt,due);
     const status=newPaid>=(parseFloat(v.total)||0)?'paid':'partial';
     const {error}=await sb.from('invoices').update({paid_amount:newPaid,status}).eq('id',id);
-    if(error)throw error;loadInvoices();
+    if(error)throw error;auditLog('payment_received','invoices',id,{amount:Math.min(amt,due),newStatus:status});loadInvoices();
   }catch(e){alert("Wasooli fail: "+e.message)}
 }
 </script>
@@ -1129,6 +1144,7 @@ async function invAddStock(){
     const {data:batch,error:bErr}=await sb.from('medicine_batches').insert({organization_id:window.CLINIC_ORG_ID,medicine_id:med.id,batch_no:qs("invBatchNo").value.trim()||null,expiry_date:qs("invExpiry").value||null,qty,sale_price:parseFloat(qs("invSalePrice").value)||0}).select('id').single();
     if(bErr)throw bErr;
     await sb.from('stock_ledger').insert({organization_id:window.CLINIC_ORG_ID,medicine_id:med.id,batch_id:batch.id,change_qty:qty,reason:'stock_in',created_by:window.CLINIC_SESSION.user?.id||null});
+    auditLog('stock_added','medicine_batches',batch.id,{medicine:name,qty:qty});
     ["invMedName","invBatchNo","invExpiry","invQty","invSalePrice"].forEach(i=>qs(i).value="");
     loadInventory();
   }catch(e){alert("Stock add fail: "+e.message)}
@@ -3892,7 +3908,7 @@ function chatPanelClose(){
 function chatPanelOpen(cardId){
   const card=document.getElementById(cardId);
   if(!card){chatBubble('Ye section is view mein nahi mila.','agent');return false}
-  if(card.style.display==='none'&&card.__roleBlocked){chatBubble('Maazrat — aapke role mein ye section nahi hai.','agent');return false}
+  if(card.style.display==='none'&&card.__roleBlocked){auditLog('access_denied','ui',null,{card:cardId},'denied');chatBubble('Maazrat — aapke role mein ye section nahi hai.','agent');return false}
   chatPanelClose();
   if(!card.__homeParent){card.__homeParent=card.parentElement;card.__homeNext=card.nextSibling;card.__homeDisplay=card.style.display}
   card.style.display='';
