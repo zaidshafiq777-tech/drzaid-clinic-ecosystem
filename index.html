@@ -1172,6 +1172,18 @@ async function crLoad(pid,pname){
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">📦 Pharmacy Inventory</h2>
 <div class="card" id="inventoryCard">
 <h2>Stock / Batches / Expiry <span class="pill blue">FEFO Auto-Deduct</span></h2>
+<div style="background:#f0fdf4;border:2px solid #10b981;border-radius:10px;padding:10px;margin:8px 0">
+  <strong style="font-size:14px;color:#065f46">🤖 AI Se Stock Add Karo (bolo ya likho)</strong>
+  <div class="api-note" style="margin:4px 0">Jaise: <em>"Panadol 500mg 100 qty price 5 rupee, Augmentin 625mg 50 qty price 45 rupee, expiry 1 saal"</em> — AI khud samajh kar sab entries bana dega.</div>
+  <textarea id="aiStockInput" rows="2" style="width:100%;box-sizing:border-box;margin-top:4px" placeholder="Medicines ki list yahan bolo/likho..."></textarea>
+  <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+    <button class="light" onclick="aiStockVoice()" id="aiStockMicBtn">🎤 Bolo</button>
+    <button class="success" onclick="aiStockParse()">🤖 AI Se Add Karo</button>
+    <span id="aiStockStatus" style="font-size:12px;color:#64748b;align-self:center"></span>
+  </div>
+  <div id="aiStockResult" style="margin-top:6px"></div>
+</div>
+<details style="margin:8px 0"><summary style="cursor:pointer;font-size:13px;color:#64748b">Ya manual likh kar add karo (agar AI use nahi karna)</summary>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;margin:8px 0">
 <input id="invMedName" placeholder="Medicine naam (Panadol 500mg)" style="padding:7px">
 <input id="invBatchNo" placeholder="Batch # (optional)" style="padding:7px">
@@ -1180,10 +1192,52 @@ async function crLoad(pid,pname){
 <input id="invSalePrice" type="number" placeholder="Sale price/unit" style="padding:7px">
 <button class="success" onclick="invAddStock()">➕ Stock Add Karo</button>
 </div>
+</details>
 <div style="margin:8px 0"><button class="light" onclick="loadInventory()">🔄 Refresh Stock</button> <span id="invStatus" style="font-size:12px;color:#64748b"></span></div>
 <div id="invList" style="max-height:340px;overflow:auto">Login karke Refresh dabao.</div>
 </div>
 <script>
+let _invStockRec=null;
+function aiStockVoice(){
+  const st=qs('aiStockStatus');
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){alert('Voice ke liye Chrome use karo.');return}
+  if(_invStockRec){const r=_invStockRec;_invStockRec=null;r.stop();qs('aiStockMicBtn').textContent='🎤 Bolo';return}
+  _invStockRec=new SR();_invStockRec.lang='ur-PK';_invStockRec.interimResults=false;_invStockRec.continuous=true;
+  _invStockRec.onresult=e=>{for(let i=e.resultIndex;i<e.results.length;i++){if(e.results[i].isFinal){qs('aiStockInput').value=(qs('aiStockInput').value?qs('aiStockInput').value+' ':'')+e.results[i][0].transcript}}};
+  _invStockRec.onerror=()=>{_invStockRec=null;qs('aiStockMicBtn').textContent='🎤 Bolo'};
+  _invStockRec.onend=()=>{if(_invStockRec){try{_invStockRec.start()}catch(e){}}};
+  _invStockRec.start();qs('aiStockMicBtn').textContent='🔴 Rok Do';
+}
+async function aiStockParse(){
+  const st=qs('aiStockStatus'),res=qs('aiStockResult');
+  const text=qs('aiStockInput').value.trim();
+  if(!text){alert('Pehle medicines ki list bolo ya likho.');return}
+  if(!window.CLINIC_ORG_ID){alert('Pehle login karo.');return}
+  st.textContent='🧠 AI samajh raha hai...';res.innerHTML='';
+  try{
+    const prompt='Extract a list of pharmacy stock items from this text (Roman Urdu/Urdu/English mixed). Return ONLY valid JSON array, no markdown, no explanation, exactly this shape: [{"name":"medicine name with strength","qty":number,"price":number,"batch_no":"" ,"expiry_days":number_or_null}]. If expiry mentioned as "1 saal" use 365, "6 mahine" use 180, if not mentioned use null. If price not mentioned use 0. Text: '+text;
+    let out=await callSelectedAI(prompt,{json:true,maxOutputTokens:800,temperature:0});
+    out=String(out).replace(/```json|```/g,'').trim();
+    const items=JSON.parse(out);
+    if(!Array.isArray(items)||!items.length)throw new Error('AI ko koi medicine samajh nahi aayi, dobara saaf likh kar try karein.');
+    st.textContent='💾 Database mein save ho raha hai...';
+    let added=[];
+    for(const it of items){
+      if(!it.name||!it.qty)continue;
+      let {data:med}=await sb.from('medicines').select('id').eq('organization_id',window.CLINIC_ORG_ID).ilike('name',it.name).maybeSingle();
+      if(!med){const {data:nm,error}=await sb.from('medicines').insert({organization_id:window.CLINIC_ORG_ID,name:it.name}).select('id').single();if(error)throw error;med=nm}
+      const expiryDate=it.expiry_days?new Date(Date.now()+it.expiry_days*86400000).toISOString().slice(0,10):null;
+      const {data:batch,error:bErr}=await sb.from('medicine_batches').insert({organization_id:window.CLINIC_ORG_ID,medicine_id:med.id,batch_no:it.batch_no||null,expiry_date:expiryDate,qty:it.qty,sale_price:it.price||0}).select('id').single();
+      if(bErr)throw bErr;
+      await sb.from('stock_ledger').insert({organization_id:window.CLINIC_ORG_ID,medicine_id:med.id,batch_id:batch.id,change_qty:it.qty,reason:'stock_in_ai',created_by:window.CLINIC_SESSION.user?.id||null});
+      added.push(it.name+' — '+it.qty+' units'+(it.price?' @ Rs.'+it.price:''));
+    }
+    st.textContent='';qs('aiStockInput').value='';
+    res.innerHTML='<div class="list-item" style="border-left:4px solid #059669"><strong>✅ Add ho gaya:</strong><br>'+added.map(escapeHtml).join('<br>')+'</div>';
+    loadInventory();
+  }catch(e){st.textContent='';res.innerHTML='<div class="list-item" style="border-left:4px solid #dc2626">❌ '+escapeHtml(e.message||String(e))+'</div>'}
+}
 async function invAddStock(){
   try{
     if(!window.CLINIC_ORG_ID){alert("Pehle login karo.");return}
