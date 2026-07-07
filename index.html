@@ -714,7 +714,7 @@ async function qbComplete(tid){
     const d=parseInt(days);
     if(d&&d>0&&t){
       const due=new Date();due.setDate(due.getDate()+d);
-      await sb.from('followups').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,due_date:due.toISOString().slice(0,10),reason:(t.visits&&t.visits.chief_complaint)||null,status:'pending'});
+      await sb.from('followups').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,due_date:due.toISOString().slice(0,10),reason:(t.visits&&t.visits.chief_complaint)||null,status:'scheduled'});
       auditLog('followup_scheduled','followups',null,{days:d,tokenId:tid});
     }
     const {error}=await sb.from('tokens').update({status:'completed'}).eq('id',tid);if(error)throw error;
@@ -819,7 +819,7 @@ async function buildPatientHistoryHtml(pid,excludeVisitId){
     const [rxq,invq,fuq,vsq]=await Promise.all([
       sb.from('prescriptions').select('diagnosis,created_at,visit_id,prescription_items(medicine_name,dosage,frequency,duration)').eq('patient_id',pid).order('created_at',{ascending:false}).limit(4),
       sb.from('invoices').select('total,paid_amount').eq('patient_id',pid).neq('status','paid'),
-      sb.from('followups').select('due_date').eq('patient_id',pid).eq('status','pending'),
+      sb.from('followups').select('due_date').eq('patient_id',pid).eq('status','scheduled'),
       sb.from('visits').select('id').eq('patient_id',pid)
     ]);
     const rx=(rxq.data||[]).filter(r=>r.visit_id!==excludeVisitId);
@@ -866,7 +866,7 @@ async function ddApprove(){
     auditLog('prescription_approved','prescriptions',rx.id,{medicines:meds.length,diagnosis:d.diagnosis||null});
     const resp=await fetch("https://drzaid.app.n8n.cloud/webhook/prescription-approved",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prescriptionId:rx.id})});
     const r=await resp.json().catch(()=>({}));
-    if(d.follow_up_days&&d.follow_up_days>0){const due=new Date();due.setDate(due.getDate()+d.follow_up_days);await sb.from('followups').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,due_date:due.toISOString().slice(0,10),reason:d.diagnosis||t.visits?.chief_complaint||null,status:'pending'})}
+    if(d.follow_up_days&&d.follow_up_days>0){const due=new Date();due.setDate(due.getDate()+d.follow_up_days);await sb.from('followups').insert({organization_id:window.CLINIC_ORG_ID,patient_id:t.patient_id,visit_id:t.visit_id,due_date:due.toISOString().slice(0,10),reason:d.diagnosis||t.visits?.chief_complaint||null,status:'scheduled'})}
     await sb.from('tokens').update({status:'doctor_done'}).eq('id',t.id);
     st.textContent="";qs("ddApproveBtn").style.display="none";
     window.DD_LAST={t:t,d:d};
@@ -1236,7 +1236,7 @@ async function loadFollowups(){
     if(!window.CLINIC_ORG_ID){st.textContent="Pehle login karo.";return}
     st.textContent="Loading...";
     const today=new Date().toISOString().slice(0,10);
-    const {data,error}=await sb.from('followups').select('id,due_date,reason,status,reminded_at,patients(full_name,phone)').eq('organization_id',window.CLINIC_ORG_ID).eq('status','pending').lte('due_date',today).order('due_date');
+    const {data,error}=await sb.from('followups').select('id,due_date,reason,status,reminded_at,patients(full_name,phone)').eq('organization_id',window.CLINIC_ORG_ID).eq('status','scheduled').lte('due_date',today).order('due_date');
     if(error)throw error;
     const rows=data||[];
     list.innerHTML=rows.length?rows.map(f=>{
@@ -1256,7 +1256,7 @@ async function fuWhatsApp(id){
   try{await sb.from('followups').update({reminded_at:new Date().toISOString()}).eq('id',id)}catch(e){}
 }
 async function fuDone(id){
-  try{const {error}=await sb.from('followups').update({status:'done'}).eq('id',id);if(error)throw error;loadFollowups()}catch(e){alert("Update fail: "+e.message)}
+  try{const {error}=await sb.from('followups').update({status:'completed'}).eq('id',id);if(error)throw error;loadFollowups()}catch(e){alert("Update fail: "+e.message)}
 }
 </script>
 <h2 style="margin:18px 0 4px;color:#1e3a8a;text-transform:uppercase;font-size:16px">🕵️ Audit Viewer</h2>
@@ -4152,7 +4152,7 @@ async function loadOwnerDashboard(){
       sb.from('invoices').select('total,paid_amount,status').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',isoToday),
       sb.from('pharmacy_queue').select('status,amount').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',isoToday),
       sb.from('lab_queue').select('status').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',isoToday),
-      sb.from('followups').select('due_date,status').eq('organization_id',window.CLINIC_ORG_ID).eq('status','pending').lte('due_date',new Date().toISOString().slice(0,10)),
+      sb.from('followups').select('due_date,status').eq('organization_id',window.CLINIC_ORG_ID).eq('status','scheduled').lte('due_date',new Date().toISOString().slice(0,10)),
       sb.from('medicine_batches').select('qty,medicines(name,reorder_level)').eq('organization_id',window.CLINIC_ORG_ID),
       sb.from('audit_logs').select('action,details').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',isoToday).ilike('action','%denied%')
     ]);
@@ -4232,7 +4232,7 @@ const RWH_CONFIG={
       const [tk,pp,fu]=await Promise.all([
         sb.from('tokens').select('status,fee,payment_status').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()),
         sb.from('bookings').select('id').eq('organization_id',window.CLINIC_ORG_ID).eq('status','pending_payment'),
-        sb.from('followups').select('id').eq('organization_id',window.CLINIC_ORG_ID).eq('status','pending').lte('due_date',new Date().toISOString().slice(0,10))
+        sb.from('followups').select('id').eq('organization_id',window.CLINIC_ORG_ID).eq('status','scheduled').lte('due_date',new Date().toISOString().slice(0,10))
       ]);
       const toks=tk.data||[];
       const waiting=toks.filter(t=>['registered','waiting_vitals','vitals_done','waiting_doctor','with_doctor'].includes(t.status)).length;
