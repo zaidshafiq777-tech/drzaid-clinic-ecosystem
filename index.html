@@ -3879,16 +3879,28 @@ function dmCanvasInit(){
   ['pointerup','pointerleave','pointercancel'].forEach(ev=>c.addEventListener(ev,()=>{_dmDrawing=false}));
 }
 function dmCanvasClear(){if(_dmCtx){const c=qs('dmCanvas');_dmCtx.fillStyle='#fff';_dmCtx.fillRect(0,0,c.width,c.height)}}
+function dmCanvasIsBlank(c){
+  try{
+    const ctx=c.getContext('2d');
+    const data=ctx.getImageData(0,0,c.width,c.height).data;
+    for(let i=0;i<data.length;i+=4*17){
+      if(data[i]<250||data[i+1]<250||data[i+2]<250)return false;
+    }
+    return true;
+  }catch(e){return false}
+}
 async function dmReadHandwriting(){
   const st=qs('dmHwStatus');
   try{
-    st.textContent='🧠 AI likhawat parh raha hai...';
     const c=qs('dmCanvas');
+    if(dmCanvasIsBlank(c)){st.textContent='';alert('Canvas khaali hai - pehle qalam se kuch likhein, phir "Likhawat Parho" dabayein.');return}
+    st.textContent='\ud83e\udde0 AI likhawat parh raha hai...';
     const b64=c.toDataURL('image/png').split(',')[1];
-    const out=await callSelectedAI('Read the handwritten clinical note in this image. It may be English, Urdu script, or Roman Urdu with medical shorthand (Rx, tds, bd, od, mg). Return ONLY the transcribed text.',{json:false,maxOutputTokens:800,temperature:0,parts:[{inline_data:{mime_type:'image/png',data:b64}}]});
-    const txt=String(out).trim();
-    if(txt){qs('dmNote').value=(qs('dmNote').value?qs('dmNote').value+'\n':'')+txt;st.textContent='✅ Note mein add — check kar lo.'}
-    else st.textContent='Parh nahi saka — thoda saaf likho.';
+    const out=await callSelectedAI('You are reading a photo of handwritten clinical notes for THIS SPECIFIC patient visit only. It may be English, Urdu script, or Roman Urdu with medical shorthand (Rx, tds, bd, od, mg). Transcribe ONLY what is actually handwritten in the image. If the image is blank, unclear, or you cannot confidently read real clinical handwriting in it, respond with EXACTLY this and nothing else: NO_HANDWRITING_DETECTED. Do not invent, guess, or add any unrelated content, advice, or explanation. Return ONLY the transcribed text or NO_HANDWRITING_DETECTED.',{json:false,maxOutputTokens:400,temperature:0,parts:[{inline_data:{mime_type:'image/png',data:b64}}]});
+    let txt=String(out).trim();
+    const looksInvalid = !txt || /NO_HANDWRITING_DETECTED/i.test(txt) || txt.length>350 || (txt.match(/\*\*[^*]+:\*\*/g)||[]).length>=2;
+    if(looksInvalid){st.textContent='';alert('Likhawat saaf nahi parhi ja saki (ya canvas mein clinical note nahi mili). Dobara saaf likh kar try karein, ya seedha type/bolo karein.');return}
+    qs('dmNote').value=(qs('dmNote').value?qs('dmNote').value+'\n':'')+txt;st.textContent='\u2705 Note mein add - check kar lo.';
   }catch(e){st.textContent='';alert('Likhawat masla: '+(e.message||e))}
 }
 let _dmRec=null;
