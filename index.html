@@ -1616,6 +1616,9 @@ function formatAIHttpError(provider,status,body){
 function formatAIFetchError(provider,err){
   let base=String(err&&err.message?err.message:err||"Unknown fetch error");
   if(/failed to fetch|networkerror|load failed|cors/i.test(base)){
+    if(provider==="gemini"){
+      return "🌐 Internet connection weak/band lag raha hai — request server tak nahi pahunchi. WiFi/mobile data check karke dobara try karein.";
+    }
     return "Network/CORS error before a usable provider response. "+aiBrowserModeMessage(provider)+" Original error: "+base;
   }
   return base;
@@ -1654,10 +1657,11 @@ async function callSelectedAI(prompt,opts={}){let provider=getSelectedAIProvider
           return out;
         }catch(err){
           lastErr=err;
-          let overloaded = err && (err.status===503||err.status===429||/UNAVAILABLE|overloaded|high demand|rate limit|empty response|MAX_TOKENS/i.test(String(err.message||"")));
+          let overloaded = err && (err.status===503||err.status===429||/UNAVAILABLE|overloaded|high demand|rate limit|empty response|MAX_TOKENS|internet connection|failed to fetch|networkerror/i.test(String(err.message||"")));
           let modelMissing = err && (err.status===404||/not found|not supported|unknown model/i.test(String(err.message||"")));
           if(overloaded && attempts<maxAttempts){
-            setAIStatus("Gemini busy, retrying ("+attempts+"/"+maxAttempts+")...","working");
+            let isNet=/internet connection|failed to fetch|networkerror/i.test(String(err.message||""));
+            setAIStatus(isNet?"🌐 Connection weak, retrying ("+attempts+"/"+maxAttempts+")...":"Gemini busy, retrying ("+attempts+"/"+maxAttempts+")...","working");
             await new Promise(r=>setTimeout(r,1200*attempts));
             continue;
           }
