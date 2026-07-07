@@ -845,7 +845,7 @@ async function ddDraft(){
   if(!note){alert("Pehle rough note likho.");return}
   st.textContent="🧠 AI draft bana raha hai...";
   try{
-    const prompt='You are a clinical scribe assistant for a Pakistani GP clinic. Convert the doctor rough note (Roman Urdu/Urdu/English) into a structured prescription DRAFT. This is a suggestion only; the doctor will review. Return ONLY valid JSON, no markdown: {"diagnosis":"final/working diagnosis","differential":["DDx 1","DDx 2"],"medicines":[{"name":"","dosage":"","frequency":"OD/BD/TDS","duration":""}],"investigations":["test names"],"advice":"short advice in Roman Urdu","follow_up_days":3}. Patient: '+(t.patients?.full_name||"")+', age '+(t.patients?.age||"?")+', '+(t.patients?.gender||"")+'. Complaint: '+(t.visits?.chief_complaint||"")+'. Doctor note: '+note;
+    const prompt='You are the Clinical Assistant for a Pakistani GP clinic (internal tool for the doctor only). Convert the doctor rough note (Roman Urdu/Urdu/English) into a structured prescription DRAFT in strict structured medical format. This is a suggestion only; the doctor will review and approve. Return ONLY valid JSON, no markdown: {"diagnosis":"final/working diagnosis","differential":["DDx 1","DDx 2"],"medicines":[{"name":"","dosage":"","frequency":"OD/BD/TDS","duration":""}],"investigations":["test names"],"advice":"short advice in Roman Urdu","follow_up_days":3}. Patient: '+(t.patients?.full_name||"")+', age '+(t.patients?.age||"?")+', '+(t.patients?.gender||"")+'. Complaint: '+(t.visits?.chief_complaint||"")+'. Doctor note: '+note;
     let out=await callSelectedAI(prompt,{json:true,maxOutputTokens:900,temperature:0});
     out=String(out).replace(/```json|```/g,"").trim();
     const d=JSON.parse(out);window.DD_DRAFT=d;
@@ -3884,7 +3884,7 @@ async function dmDraft(){
   if(!note){alert('Pehle note likho/bolo.');return}
   st.textContent='🧠 Draft ban raha hai...';
   try{
-    const prompt='You are a clinical scribe assistant for a Pakistani GP clinic. Convert the doctor rough note (Roman Urdu/Urdu/English) into a structured prescription DRAFT. Suggestion only; doctor will review. Return ONLY valid JSON: {"diagnosis":"final/working diagnosis","differential":["DDx 1","DDx 2"],"medicines":[{"name":"","dosage":"","frequency":"OD/BD/TDS","duration":""}],"investigations":[],"advice":"Roman Urdu advice","follow_up_days":3}. Patient: '+(t.patients?.full_name||'')+', age '+(t.patients?.age||'?')+', '+(t.patients?.gender||'')+'. Complaint: '+(t.visits?.chief_complaint||'')+'. Doctor note: '+note;
+    const prompt='You are the Clinical Assistant for a Pakistani GP clinic (internal tool for the doctor only). Convert the doctor rough note (Roman Urdu/Urdu/English) into a structured prescription DRAFT in strict structured medical format. Suggestion only; doctor will review. Return ONLY valid JSON: {"diagnosis":"final/working diagnosis","differential":["DDx 1","DDx 2"],"medicines":[{"name":"","dosage":"","frequency":"OD/BD/TDS","duration":""}],"investigations":[],"advice":"Roman Urdu advice","follow_up_days":3}. Patient: '+(t.patients?.full_name||'')+', age '+(t.patients?.age||'?')+', '+(t.patients?.gender||'')+'. Complaint: '+(t.visits?.chief_complaint||'')+'. Doctor note: '+note;
     let out=await callSelectedAI(prompt,{json:true,maxOutputTokens:900,temperature:0});
     out=String(out).replace(/```json|```/g,'').trim();
     const d=JSON.parse(out);window.DD_DRAFT=d;
