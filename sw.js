@@ -1,4 +1,4 @@
-const CACHE_NAME = "drzaid-clinic-v3";
+const CACHE_NAME = "drzaid-clinic-v4-workflow-first";
 const APP_SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (event) => {
