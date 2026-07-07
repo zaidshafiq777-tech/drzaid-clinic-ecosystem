@@ -1464,7 +1464,8 @@ const ROLE_ALLOWED_HEADINGS = {
   vitals_staff: ['Aaj Ki Token Queue','Vitals Screening'],
   nurse: ['Aaj Ki Token Queue','Vitals Screening'],
   receptionist: ['Patient Intake Agent','Aaj Ki Token Queue','Aaj Ka Hisaab','Invoices / Udhaar Ledger','Online Bookings — Payment Verify','Aaj Ke Follow-ups','Reception Dashboard','Appointment Booking','Payment / Fee Status','Live Clinic Timeline (All Patients Today)'],
-  billing: ['Aaj Ka Hisaab','Invoices / Udhaar Ledger','Online Bookings — Payment Verify','Billing Summary','Payment / Fee Status']
+  billing: ['Aaj Ka Hisaab','Invoices / Udhaar Ledger','Online Bookings — Payment Verify','Billing Summary','Payment / Fee Status'],
+  doctor: ['Patient Search','Patient Profile','Latest Active Treatment','All Visits / Old Rx History','Doctor Quick Note / AI Scribe Input','Clinical Form','Medicine Grid','Mere Paas Waiting Patients','Patient History Search','Clinical Memory & Decision Support v1','Report Intelligence v1']
 };
 function applyRoleBasedView(){
  try{
@@ -1472,7 +1473,8 @@ function applyRoleBasedView(){
   if(!role) return;
   const lb=document.getElementById('logoutBtnFixed');
   if(lb&&window.CLINIC_SESSION.profile)lb.textContent=(window.CLINIC_SESSION.profile.full_name||'')+' ('+role+') | Logout';
-  if(ROLE_VIEW_ALWAYS_FULL.includes(role)||role==='doctor'){try{if(qs('dmFab'))qs('dmFab').style.display='block';if(role==='doctor'){dmOpen();const av=qs('auditViewerCard');if(av){av.style.display='none';const h=av.previousElementSibling;if(h&&h.tagName==='H2')h.style.display='none'}}}catch(e){}return}
+  if(ROLE_VIEW_ALWAYS_FULL.includes(role))return;
+  if(role==='doctor'){try{if(qs('dmFab'))qs('dmFab').style.display='block';dmOpen()}catch(e){}}
   const allowed = ROLE_ALLOWED_HEADINGS[role];
   if(!allowed||!allowed.length)return;
   const cards=Array.from(document.querySelectorAll('.card'));
