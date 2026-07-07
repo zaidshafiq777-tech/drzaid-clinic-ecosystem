@@ -852,7 +852,7 @@ async function ddDraft(){
     if(d.invalid_note){qs("ddDraftView").innerHTML='<div class="list-item" style="border-left:4px solid #dc2626">⚠️ <strong>'+escapeHtml(d.advice||"Ye note clinical nahi lag raha.")+'</strong><br><small>Note check karein — sahi note likh kar dobara draft banayein.</small></div>';qs("ddApproveBtn").style.display="none";return}
     qs("ddDraftView").innerHTML='<div class="list-item" style="border-left:4px solid #0ea5e9"><strong>Draft (AI suggestion — approve se pehle check karein):</strong><br><strong>Dx:</strong> '+escapeHtml(d.diagnosis||"--")+'<br><strong>DDx:</strong> '+((d.differential||[]).map(escapeHtml).join(", ")||"--")+'<br><strong>Rx:</strong> '+((d.medicines||[]).map(m=>escapeHtml([m.name,m.dosage,m.frequency,m.duration].filter(Boolean).join(" "))).join("; ")||"--")+'<br><strong>Tests:</strong> '+((d.investigations||[]).map(escapeHtml).join(", ")||"--")+'<br><strong>Advice:</strong> '+escapeHtml(d.advice||"--")+'<br><strong>Follow-up:</strong> '+(d.follow_up_days||0)+' din</div>';
     qs("ddApproveBtn").style.display="inline-block";st.textContent="Draft tayyar — check kar ke Approve karo (ya note badal kar dobara draft banao).";
-  }catch(e){st.textContent="";alert("Draft fail: "+(e.message||e))}
+  }catch(e){st.textContent="";const msg=String(e&&e.message||e||"");const isNet=/failed to fetch|network|cors/i.test(msg);alert(isNet?"🌐 Internet signal kamzor tha, isliye AI tak baat nahi pahunchi. Signal check karke dobara \"AI Draft\" dabayein.":"Draft fail: "+msg)}
 }
 async function ddApprove(){
   const st=qs("ddPanelStatus");const t=window.DD_SEL,d=window.DD_DRAFT;
@@ -3954,7 +3954,7 @@ async function dmDraft(){
     if(d.invalid_note){qs('dmDraftView').innerHTML='<div class="list-item" style="border-left:4px solid #dc2626">⚠️ <strong>'+escapeHtml(d.advice||'Ye note clinical nahi lag raha.')+'</strong><br><small>Note check karein — kahin galat/purani cheez paste to nahi ho gayi. Sahi note likh kar dobara "AI Draft" dabayein.</small></div>';qs('dmApproveBtn').style.display='none';return}
     qs('dmDraftView').innerHTML='<div class="list-item" style="border-left:4px solid #0ea5e9"><strong>Draft (check karo):</strong><br><strong>Dx:</strong> '+escapeHtml(d.diagnosis||'--')+'<br><strong>DDx:</strong> '+((d.differential||[]).map(escapeHtml).join(', ')||'--')+'<br><strong>Rx:</strong> '+((d.medicines||[]).map(m=>escapeHtml([m.name,m.dosage,m.frequency,m.duration].filter(Boolean).join(' '))).join('; ')||'--')+'<br><strong>Tests:</strong> '+((d.investigations||[]).map(escapeHtml).join(', ')||'--')+'<br><strong>Advice:</strong> '+escapeHtml(d.advice||'--')+'<br><strong>Follow-up:</strong> '+(d.follow_up_days||0)+' din</div>';
     qs('dmApproveBtn').style.display='inline-block';st.textContent='';
-  }catch(e){st.textContent='';alert('Draft fail: '+(e.message||e))}
+  }catch(e){st.textContent='';const msg=String(e&&e.message||e||"");const isNet=/failed to fetch|network|cors/i.test(msg);alert(isNet?"🌐 Internet signal kamzor tha, isliye AI tak baat nahi pahunchi. Signal check karke dobara \"AI Draft\" dabayein.":'Draft fail: '+msg)}
 }
 async function dmApprove(){
   const st=qs('dmStatus');st.textContent='Saving & routing...';
