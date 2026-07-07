@@ -1216,10 +1216,14 @@ async function aiStockParse(){
   if(!window.CLINIC_ORG_ID){alert('Pehle login karo.');return}
   st.textContent='🧠 AI samajh raha hai...';res.innerHTML='';
   try{
-    const prompt='Extract a list of pharmacy stock items from this text (Roman Urdu/Urdu/English mixed). Return ONLY valid JSON array, no markdown, no explanation, exactly this shape: [{"name":"medicine name with strength","qty":number,"price":number,"batch_no":"" ,"expiry_days":number_or_null}]. If expiry mentioned as "1 saal" use 365, "6 mahine" use 180, if not mentioned use null. If price not mentioned use 0. Text: '+text;
+    const prompt='Extract pharmacy stock items from this text. Text may be casual spoken Roman Urdu/Urdu/English, OR messy invoice/receipt text with product codes, pack sizes, batch numbers, unit price, gross, total. CRITICAL: Respond with ONLY a raw JSON array - absolutely no preamble, no explanation, no "It seems" or any words before/after the JSON, no markdown fences. If the text is ambiguous or has multiple numbers, prioritize: medicine name+strength (ignore leading product codes like "109"), quantity (the actual count being added to stock, not invoice line codes), unit price (price per single unit, NOT the gross/total), batch number (if explicitly labeled), expiry date (if a date like DD/MM/YYYY is present, convert to days-from-today as expiry_days; if "1 saal" use 365, "6 mahine" use 180). Exact shape required: [{"name":"medicine name with strength","qty":number,"price":number,"batch_no":"","expiry_days":number_or_null}]. If price truly not mentioned use 0. Text to parse: '+text;
     let out=await callSelectedAI(prompt,{json:true,maxOutputTokens:800,temperature:0});
     out=String(out).replace(/```json|```/g,'').trim();
-    const items=JSON.parse(out);
+    const jsonStart=out.indexOf('[');const jsonEnd=out.lastIndexOf(']');
+    if(jsonStart===-1||jsonEnd===-1||jsonEnd<jsonStart){
+      throw new Error('AI ne seedha JSON nahi diya (shayad text bohot confusing tha). Sirf zaroori cheezein saaf likhein: naam, quantity, price, expiry date. Ya manual form use karein.');
+    }
+    const items=JSON.parse(out.slice(jsonStart,jsonEnd+1));
     if(!Array.isArray(items)||!items.length)throw new Error('AI ko koi medicine samajh nahi aayi, dobara saaf likh kar try karein.');
     st.textContent='💾 Database mein save ho raha hai...';
     let added=[];
