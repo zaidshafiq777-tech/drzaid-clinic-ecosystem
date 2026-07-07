@@ -1017,7 +1017,7 @@ async function ppVerify(id){
   try{
     await sb.from('bookings').update({status:'verified',verified_by:window.CLINIC_SESSION.user?.id||null}).eq('id',id);
     auditLog('payment_verified','bookings',id,{tid:b.tid,amount:b.amount,method:b.payment_method});
-    const resp=await fetch('https://drzaid.app.n8n.cloud/webhook/patient-intake',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:b.phone,name:b.name,age:b.age||null,gender:'',complaint:b.complaint||'Online paid booking',visit_mode:'in_clinic',source:'online_paid',payment_status:'paid',payment_method:b.payment_method||'',fee:b.amount||300})});
+    const resp=await fetch('https://drzaid.app.n8n.cloud/webhook/patient-intake',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:b.phone,name:b.name,age:b.age||null,gender:'',complaint:b.complaint||'Online paid booking',visit_mode:b.booking_type||'in_clinic',source:'online_paid',payment_status:'paid',payment_method:b.payment_method||'',fee:b.amount||300})});
     if(!resp.ok)throw new Error('Token agent error '+resp.status);
     const r=await resp.json();
     await sb.from('bookings').update({status:'confirmed',token_id:r.tokenId||null}).eq('id',id);
@@ -1393,7 +1393,8 @@ function avExport(){
 <section class="panel panel-right"><div class="preview-card" id="printArea"><div class="rx-header"><div class="rx-title">PRESCRIPTION</div><div class="rx-doc">Dr. Zaid Shafique, MBBS</div><div class="rx-meta">Family Physician</div><div class="rx-contact">WhatsApp Contact Only: 0303-4846161<br>For Appointments: 0327-4845413<br>Clinic Hours: 5:00 PM – 8:00 PM</div></div><div class="rx-patient"><div><strong>Patient Name:</strong> <span id="pvName">--</span></div><div><strong>Date:</strong> <span id="pvDate">--</span></div><div><strong>Visit:</strong> <span id="pvVisitInfo">--</span></div><div><strong>Age/Gender:</strong> <span id="pvAgeGender">--</span></div><div><strong>Contact Number:</strong> <span id="pvPhone">--</span></div><div><strong>EMR Number:</strong> <span id="pvEmr">--</span></div><div><strong>Guardian:</strong> <span id="pvGuardian">--</span></div><div><strong>Address:</strong> <span id="pvAddress">--</span></div><div><strong>Vitals:</strong> <span id="pvVitals">--</span></div><div><strong>Registry Status:</strong> <span id="pvStatus">--</span></div></div><div class="rx-section"><h3>Presenting Complaints</h3><div id="pvComplaints">--</div></div><div class="rx-section"><h3>Examination</h3><div id="pvExam">--</div></div><div class="rx-section"><h3>Current Medicines</h3><ol class="rx-meds" id="pvMeds"><li>--</li></ol></div><div class="rx-section"><h3>Investigations Advised</h3><div id="pvInvestigations">--</div></div><div class="rx-section"><h3>Advice</h3><div id="pvAdvice" class="urdu">--</div></div><div class="rx-section" id="pvLifestyleBlock"><h3>Lifestyle / Dietary Advice</h3><div id="pvLifestyleAdvice">--</div></div><div class="rx-section" id="pvMonitoringBlock"><h3>Home BP / Sugar Record</h3><div id="pvMonitoringPlan" class="rx-monitoring-table">--</div></div><div class="rx-section"><h3>Follow-Up</h3><div id="pvFollowUp">--</div></div><div class="rx-section"><h3>Final Diagnosis</h3><div id="pvFinalDx">--</div></div><div class="rx-section"><h3>Differential Diagnosis</h3><div id="pvDiffDx">--</div></div><div class="rx-section" id="pvClinicalBlock"><h3>Clinical Notes</h3><div id="pvClinicalNotes">--</div></div><div class="rx-section"><h3>Patient Registry Status</h3><div id="pvRegistryStatus">--</div></div><div class="rx-footer"><span>Doctor approved prescription snapshot</span><span id="pvPrescriptionId">Draft Preview</span></div></div><div class="small-actions no-print"><button class="success" onclick="approveAndSign()">Approve & Sign</button><button class="secondary" onclick="printPrescription()">Print Prescription</button><button class="light" onclick="openGmailPrescription()">Gmail Prescription</button><button class="success" onclick="openWhatsAppPrescription()">WhatsApp Rx</button><button class="light" onclick="copyPrescriptionText()">Copy Rx Text</button></div></section>
 </main>
 <script>
-const STORAGE_KEY="drzaid_offline_emr_mvp_repaired_v1";const CLINIC_GMAIL_STORAGE="drzaid_clinic_official_gmail";const DEFAULT_CLINIC_GMAIL="batalaclinic1234@gmail.com";const GEMINI_KEY_STORAGE="drzaid_gemini_25_flash_api_key";const AI_PROVIDER_SETTINGS_STORAGE="drzaid_multi_ai_provider_settings_v1";const AI_KEY_PREFIX="drzaid_ai_provider_key_";const AI_DEPRECATED_GEMINI_MODEL_RE=/^(models\/)?gemini-1\.5-/i;const AI_PROVIDER_CONFIGS={
+const STORAGE_KEY="drzaid_offline_emr_mvp_repaired_v1";const CLINIC_GMAIL_STORAGE="drzaid_clinic_official_gmail";const DEFAULT_CLINIC_GMAIL="batalaclinic1234@gmail.com";const GEMINI_KEY_STORAGE="drzaid_gemini_25_flash_api_key";const AI_PROVIDER_SETTINGS_STORAGE="drzaid_multi_ai_provider_settings_v1";const AI_KEY_PREFIX="drzaid_ai_provider_key_";const AI_DEPRECATED_GEMINI_MODEL_RE=/^(models\/)?gemini-1\.5-/i;const CLINIC_ZOOM_LINK='TO_BE_CONFIGURED'; // Dr. Zaid apna Zoom personal meeting link yahan daal sakte hain
+const AI_PROVIDER_CONFIGS={
   gemini:{label:"Gemini",kind:"gemini",defaultModel:"gemini-2.5-flash",baseUrl:"https://generativelanguage.googleapis.com/v1beta/models",models:["gemini-2.5-flash","gemini-2.0-flash","gemini-2.5-flash-lite"],fallbackModels:["gemini-2.5-flash","gemini-2.0-flash","gemini-2.5-flash-lite"]},
   openai:{label:"OpenAI (ChatGPT)",kind:"openai",defaultModel:"gpt-4o-mini",baseUrl:"https://api.openai.com/v1/chat/completions",models:["gpt-4o-mini","gpt-4o","gpt-4.1-mini"],fallbackModels:["gpt-4o-mini"]},
   deepseek:{label:"DeepSeek",kind:"deepseek",defaultModel:"deepseek-chat",baseUrl:"https://api.deepseek.com/chat/completions",models:["deepseek-chat","deepseek-reasoner"],fallbackModels:["deepseek-chat"]},
@@ -3836,7 +3837,7 @@ async function dmLoad(){
   try{
     if(!window.CLINIC_ORG_ID){alert('Pehle login karo.');return}
     const today=new Date();today.setHours(0,0,0,0);
-    const {data}=await sb.from('tokens').select('id,token_number,status,visit_id,patient_id,patients(full_name,age,gender),visits(chief_complaint)').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()).in('status',['registered','waiting_vitals','vitals_done','waiting_doctor','with_doctor']).order('token_number');
+    const {data}=await sb.from('tokens').select('id,token_number,status,visit_id,patient_id,patients(full_name,age,gender,phone),visits(chief_complaint)').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()).in('status',['registered','waiting_vitals','vitals_done','waiting_doctor','with_doctor']).order('token_number');
     const rows=data||[];window.DD_ROWS=window.DD_ROWS||{};rows.forEach(r=>DD_ROWS[r.id]=r);
     const waiting=rows.filter(r=>['registered','waiting_vitals'].includes(r.status)).length;
     const ready=rows.filter(r=>r.status==='vitals_done').length;
@@ -3852,6 +3853,22 @@ async function dmLoad(){
     if(!rows.length){qs('dmChips').innerHTML='<div style="color:#94a3b8;font-size:12.5px;padding:8px 0">Aaj koi patient queue mein nahi. Naya token banate hi yahan aa jayega.</div>'}
   }catch(e){alert('Load fail: '+e.message)}
 }
+function onlineVisitInfo(complaint){
+  const m=/^\[Online-(WhatsApp|Zoom)\]\s*/.exec(complaint||'');
+  if(!m)return null;
+  return {channel:m[1],cleanComplaint:(complaint||'').replace(m[0],'')};
+}
+function onlineContactBtn(phone,channel){
+  if(channel==='WhatsApp'){
+    let ph=String(phone||'').replace(/[^0-9]/g,'');if(ph.startsWith('0'))ph='92'+ph.slice(1);
+    return '<a href="https://wa.me/'+ph+'" target="_blank" style="text-decoration:none"><button class="success" style="padding:6px 12px;font-size:12.5px">📱 WhatsApp Karo</button></a>';
+  }
+  if(channel==='Zoom'){
+    if(CLINIC_ZOOM_LINK==='TO_BE_CONFIGURED')return '<span class="pill" style="background:#fef3c7;color:#92400e">🎥 Zoom link abhi set nahi (Settings mein add karein)</span>';
+    return '<a href="'+CLINIC_ZOOM_LINK+'" target="_blank" style="text-decoration:none"><button class="success" style="padding:6px 12px;font-size:12.5px">🎥 Zoom Join Karo</button></a>';
+  }
+  return '';
+}
 async function dmSelect(tid){
   const t=window.DD_ROWS&&DD_ROWS[tid];if(!t)return;
   window.DD_SEL=t;window.DD_DRAFT=null;
@@ -3860,7 +3877,10 @@ async function dmSelect(tid){
   try{const {data:v}=await sb.from('vitals').select('*').eq('visit_id',t.visit_id).order('created_at',{ascending:false}).limit(1);
     if(v&&v.length){const x=v[0];vitHtml='<small>🩺 BP: '+escapeHtml(x.bp||'--')+' | Pulse: '+(x.pulse||'--')+' | Temp: '+(x.temperature||'--')+' | SpO2: '+(x.spo2||'--')+(x.is_abnormal?' <span class="pill" style="background:#fee2e2;color:#991b1b">⚠️ ABNORMAL</span>':'')+'</small>'}}catch(e){}
   try{if(t.status!=='with_doctor')await sb.from('tokens').update({status:'with_doctor'}).eq('id',t.id)}catch(e){}
-  qs('dmSummary').innerHTML='<strong style="font-size:17px">#'+t.token_number+' '+escapeHtml(t.patients?.full_name||'')+'</strong>'+(t.patients?.age?' | '+t.patients.age+' saal':'')+(t.patients?.gender?' | '+escapeHtml(t.patients.gender):'')+'<br><small>Shikayat: '+escapeHtml(t.visits?.chief_complaint||'--')+'</small><br>'+vitHtml;
+  const _ovInfo=onlineVisitInfo(t.visits?.chief_complaint);
+  const _complaintShown=_ovInfo?_ovInfo.cleanComplaint:(t.visits?.chief_complaint||'--');
+  const _ovBadge=_ovInfo?'<br><span class="pill blue">💻 Online — '+_ovInfo.channel+'</span> '+onlineContactBtn(t.patients?.phone,_ovInfo.channel):'';
+  qs('dmSummary').innerHTML='<strong style="font-size:17px">#'+t.token_number+' '+escapeHtml(t.patients?.full_name||'')+'</strong>'+(t.patients?.age?' | '+t.patients.age+' saal':'')+(t.patients?.gender?' | '+escapeHtml(t.patients.gender):'')+'<br><small>Shikayat: '+escapeHtml(_complaintShown||'--')+'</small>'+_ovBadge+'<br>'+vitHtml;
   qs('dmHistory').innerHTML='<small style="color:#64748b">🧠 History...</small>';
   qs('dmHistory').innerHTML=await buildPatientHistoryHtml(t.patient_id,t.visit_id);
 }
