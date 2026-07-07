@@ -3801,6 +3801,11 @@ document.addEventListener("DOMContentLoaded",()=>{setTimeout(()=>{try{fdShowView
     <strong style="font-size:18px;color:#095c40">🩺 Doctor Workspace</strong>
     <div><button class="light" onclick="dmLoad()">🔄 Refresh</button> <button class="warning" onclick="qs('doctorModeOverlay').style.display='none'">✖ Band</button></div>
   </div>
+  <div id="dmToolTabs" style="display:flex;gap:6px;margin-bottom:8px">
+    <button class="success" id="dmTabPatient" style="padding:6px 14px;font-size:12.5px" onclick="dmShowTool('patient')">🧑‍⚕️ Patient</button>
+    <button class="light" id="dmTabReport" style="padding:6px 14px;font-size:12.5px" onclick="dmShowTool('report')">🔬 Report Intelligence</button>
+  </div>
+  <div id="dmReportHost" style="display:none;margin-bottom:10px"></div>
   <div style="display:grid;grid-template-columns:minmax(230px,280px) 1fr;gap:12px;align-items:start">
     <div>
       <div id="dmStats" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px"></div>
@@ -3837,6 +3842,23 @@ document.addEventListener("DOMContentLoaded",()=>{setTimeout(()=>{try{fdShowView
 </div>
 <script>
 function dmOpen(){qs('doctorModeOverlay').style.display='block';dmLoad()}
+function dmShowTool(which){
+  const patCol=qs('dmPatient'),empty=qs('dmEmptyState'),repHost=qs('dmReportHost');
+  const tp=qs('dmTabPatient'),tr=qs('dmTabReport');
+  if(which==='report'){
+    const card=document.getElementById('reportIntelligenceCard');
+    if(card){
+      if(!card.__homeParent){card.__homeParent=card.parentElement;card.__homeNext=card.nextSibling;card.__homeDisplay=card.style.display}
+      card.style.display='';repHost.appendChild(card);
+    }
+    repHost.style.display='block';if(patCol)patCol.style.display='none';if(empty)empty.style.display='none';
+    tr.className='success';tp.className='light';
+  }else{
+    repHost.style.display='none';
+    tr.className='light';tp.className='success';
+    if(window.DD_SEL){if(patCol)patCol.style.display='block'}else{if(empty)empty.style.display='block'}
+  }
+}
 async function dmLoad(){
   try{
     if(!window.CLINIC_ORG_ID){alert('Pehle login karo.');return}
@@ -4204,7 +4226,7 @@ function postLoginRouting(){
 </div>
 <script>
 const RWH_CONFIG={
-  reception:{title:'🛎 Reception Desk',cards:['Patient Intake Agent','Aaj Ki Token Queue','Online Bookings — Payment Verify','Aaj Ke Follow-ups'],
+  reception:{title:'🛎 Reception Desk',cards:['Patient Intake Agent','Aaj Ki Token Queue','Online Bookings — Payment Verify','Patient History Search','Aaj Ke Follow-ups'],
     stats:async()=>{
       const today=new Date();today.setHours(0,0,0,0);
       const [tk,pp,fu]=await Promise.all([
