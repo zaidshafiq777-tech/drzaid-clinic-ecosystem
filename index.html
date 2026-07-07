@@ -3790,17 +3790,22 @@ document.addEventListener("DOMContentLoaded",()=>{setTimeout(()=>{try{fdShowView
 
 <button id="dmFab" style="display:none;position:fixed;bottom:96px;right:14px;z-index:8500;background:#095c40;color:#fff;border:none;border-radius:50px;padding:12px 18px;font-size:14px;font-weight:700;box-shadow:0 6px 20px rgba(0,0,0,.3);cursor:pointer" onclick="dmOpen()">🩺 Doctor Mode</button>
 <div id="doctorModeOverlay" style="display:none;position:fixed;inset:0;background:#f8fafc;z-index:9000;overflow:auto;padding:54px 12px 12px;box-sizing:border-box">
-  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-    <strong style="font-size:18px;color:#095c40">🩺 Doctor Mode</strong>
-    <div><button class="light" onclick="dmLoad()">🔄</button> <button class="warning" onclick="qs('doctorModeOverlay').style.display='none'">✖ Band</button></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+    <strong style="font-size:18px;color:#095c40">🩺 Doctor Workspace</strong>
+    <div><button class="light" onclick="dmLoad()">🔄 Refresh</button> <button class="warning" onclick="qs('doctorModeOverlay').style.display='none'">✖ Band</button></div>
   </div>
-  <div id="dmChips" style="display:flex;gap:6px;overflow-x:auto;padding:10px 0"></div>
-  <div id="dmEmptyState" style="display:none;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;text-align:center;color:#64748b">
-    <div style="font-size:15px;font-weight:700;color:#334155">🩺 Aaj Ki Queue Khaali Hai</div>
-    <div style="font-size:12.5px;margin-top:4px">Jaise hi reception koi patient ka token banayegi (vitals ke baad), wo yahan chip ki tarah aa jayega.</div>
-    <div style="margin-top:10px;font-size:12px;color:#94a3b8">Waiting: 0 · Vitals Done: 0 · With Doctor: 0</div>
-  </div>
-  <div id="dmPatient" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px;display:none">
+  <div style="display:grid;grid-template-columns:minmax(230px,280px) 1fr;gap:12px;align-items:start">
+    <div>
+      <div id="dmStats" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px"></div>
+      <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">📋 Today's Queue</div>
+      <div id="dmChips" style="display:flex;flex-direction:column;gap:6px;max-height:70vh;overflow-y:auto"></div>
+    </div>
+    <div>
+      <div id="dmEmptyState" style="display:none;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;text-align:center;color:#64748b">
+        <div style="font-size:16px;font-weight:700;color:#334155">🩺 Koi Patient Select Nahi Hua</div>
+        <div style="font-size:12.5px;margin-top:4px">Bayen taraf Queue se koi patient chunain — unki vitals, history, aur AI Scribe yahan khulega.</div>
+      </div>
+      <div id="dmPatient" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px;display:none">
     <div id="dmSummary"></div>
     <div id="dmHistory" style="margin-top:6px"></div>
     <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
@@ -3819,6 +3824,8 @@ document.addEventListener("DOMContentLoaded",()=>{setTimeout(()=>{try{fdShowView
       <span id="dmStatus" style="font-size:12px;color:#64748b"></span>
     </div>
     <div id="dmDraftView" style="margin-top:8px"></div>
+      </div>
+    </div>
   </div>
 </div>
 <script>
@@ -3829,15 +3836,24 @@ async function dmLoad(){
     const today=new Date();today.setHours(0,0,0,0);
     const {data}=await sb.from('tokens').select('id,token_number,status,visit_id,patient_id,patients(full_name,age,gender),visits(chief_complaint)').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()).in('status',['registered','waiting_vitals','vitals_done','waiting_doctor','with_doctor']).order('token_number');
     const rows=data||[];window.DD_ROWS=window.DD_ROWS||{};rows.forEach(r=>DD_ROWS[r.id]=r);
-    qs('dmChips').innerHTML=rows.length?rows.map(t=>'<button class="light" style="white-space:nowrap;padding:8px 14px;border-radius:20px" onclick="dmSelect(\''+t.id+'\')">#'+t.token_number+' '+escapeHtml(t.patients?.full_name||'--')+'</button>').join(''):'';
+    const waiting=rows.filter(r=>['registered','waiting_vitals'].includes(r.status)).length;
+    const ready=rows.filter(r=>r.status==='vitals_done').length;
+    const withDoc=rows.filter(r=>r.status==='with_doctor').length;
+    const stat=(v,l,c)=>'<div style="background:#fff;border-top:3px solid '+c+';border-radius:8px;padding:6px 4px;text-align:center"><div style="font-size:18px;font-weight:800;color:#0f172a">'+v+'</div><div style="font-size:9.5px;color:#64748b">'+l+'</div></div>';
+    qs('dmStats').innerHTML=stat(waiting,'Waiting','#f59e0b')+stat(ready,'Ready','#10b981')+stat(withDoc,'With Me','#0ea5e9');
+    qs('dmChips').innerHTML=rows.length?rows.map(t=>{
+      const badge=t.status==='with_doctor'?'<span style="color:#0ea5e9;font-weight:700">● Aapke Saath</span>':(t.status==='vitals_done'?'<span style="color:#10b981">● Ready</span>':'<span style="color:#f59e0b">● Waiting</span>');
+      return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:9px 11px;cursor:pointer" onclick="dmSelect(\''+t.id+'\')"><strong>#'+t.token_number+' '+escapeHtml(t.patients?.full_name||'--')+'</strong>'+(t.patients?.age?' <small>('+t.patients.age+')</small>':'')+'<br><small style="color:#64748b">'+escapeHtml((t.visits?.chief_complaint||'').slice(0,40)||'--')+'</small><br><small>'+badge+'</small></div>';
+    }).join(''):'';
     const dmEmpty=qs('dmEmptyState');
-    if(dmEmpty)dmEmpty.style.display=rows.length?'none':'block';
+    if(dmEmpty&&!window.DD_SEL)dmEmpty.style.display='block';
+    if(!rows.length){qs('dmChips').innerHTML='<div style="color:#94a3b8;font-size:12.5px;padding:8px 0">Aaj koi patient queue mein nahi. Naya token banate hi yahan aa jayega.</div>'}
   }catch(e){alert('Load fail: '+e.message)}
 }
 async function dmSelect(tid){
   const t=window.DD_ROWS&&DD_ROWS[tid];if(!t)return;
   window.DD_SEL=t;window.DD_DRAFT=null;
-  qs('dmPatient').style.display='block';qs('dmDraftView').innerHTML='';qs('dmApproveBtn').style.display='none';qs('dmNote').value='';
+  qs('dmPatient').style.display='block';const de=qs('dmEmptyState');if(de)de.style.display='none';qs('dmDraftView').innerHTML='';qs('dmApproveBtn').style.display='none';qs('dmNote').value='';
   let vitHtml='';
   try{const {data:v}=await sb.from('vitals').select('*').eq('visit_id',t.visit_id).order('created_at',{ascending:false}).limit(1);
     if(v&&v.length){const x=v[0];vitHtml='<small>🩺 BP: '+escapeHtml(x.bp||'--')+' | Pulse: '+(x.pulse||'--')+' | Temp: '+(x.temperature||'--')+' | SpO2: '+(x.spo2||'--')+(x.is_abnormal?' <span class="pill" style="background:#fee2e2;color:#991b1b">⚠️ ABNORMAL</span>':'')+'</small>'}}catch(e){}
@@ -4131,8 +4147,93 @@ async function loadOwnerDashboard(){
 function postLoginRouting(){
   const role=window.CLINIC_SESSION&&window.CLINIC_SESSION.profile?window.CLINIC_SESSION.profile.role:null;
   if(['org_owner','branch_admin','super_admin'].includes(role)){try{ownerDashboardOpen()}catch(e){}return}
+  if(role==='receptionist'){try{workflowHomeOpen('reception')}catch(e){}return}
+  if(role==='pharmacist'){try{workflowHomeOpen('pharmacy')}catch(e){}return}
+  if(role==='lab_technician'){try{workflowHomeOpen('lab')}catch(e){}return}
   // Workflow screen is primary now; chat is a small collapsible assistant (not fullscreen by default)
   try{const cf=qs('chatFab');if(cf)cf.style.display='block'}catch(e){}
+}
+</script>
+
+<div id="roleWorkflowHome" style="display:none;position:fixed;inset:0;background:#f1f5f9;z-index:8700;overflow:auto;padding:54px 12px 20px;box-sizing:border-box">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+    <strong id="rwhTitle" style="font-size:19px;color:#0f172a"></strong>
+    <div><button class="light" style="padding:8px 12px;font-size:12.5px" onclick="workflowHomeRefresh()">🔄 Refresh</button> <button class="success" style="padding:8px 12px;font-size:12.5px" onclick="chatShellOpen()">💬 Assistant</button></div>
+  </div>
+  <div id="rwhStats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:14px"></div>
+  <div id="rwhContent" style="display:flex;flex-direction:column;gap:12px"></div>
+</div>
+<script>
+const RWH_CONFIG={
+  reception:{title:'🛎 Reception Desk',cards:['Patient Intake Agent','Aaj Ki Token Queue','Online Bookings — Payment Verify','Aaj Ke Follow-ups'],
+    stats:async()=>{
+      const today=new Date();today.setHours(0,0,0,0);
+      const [tk,pp,fu]=await Promise.all([
+        sb.from('tokens').select('status,fee,payment_status').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()),
+        sb.from('bookings').select('id').eq('organization_id',window.CLINIC_ORG_ID).eq('status','pending_payment'),
+        sb.from('followups').select('id').eq('organization_id',window.CLINIC_ORG_ID).eq('status','pending').lte('due_date',new Date().toISOString().slice(0,10))
+      ]);
+      const toks=tk.data||[];
+      const waiting=toks.filter(t=>['registered','waiting_vitals','vitals_done','waiting_doctor','with_doctor'].includes(t.status)).length;
+      const collected=toks.filter(t=>t.payment_status==='paid').reduce((s,t)=>s+(parseFloat(t.fee)||0),0);
+      return [['Waiting Queue',waiting,'#f59e0b'],['Today Tokens',toks.length,'#38bdf8'],['Pending Payments',(pp.data||[]).length,'#a78bfa'],["Today's Collection",'Rs.'+collected.toLocaleString(),'#10b981'],['Follow-ups Due',(fu.data||[]).length,'#f59e0b']];
+    },
+    load:()=>{if(typeof loadQueueBoard==='function')loadQueueBoard();if(typeof loadPendingPayments==='function')loadPendingPayments();if(typeof loadFollowups==='function')loadFollowups()}
+  },
+  pharmacy:{title:'💊 Pharmacy Desk',cards:['Pharmacy & Lab Queues','Stock / Batches / Expiry'],
+    stats:async()=>{
+      const today=new Date();today.setHours(0,0,0,0);
+      const [pq,mb]=await Promise.all([
+        sb.from('pharmacy_queue').select('status,amount').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()),
+        sb.from('medicine_batches').select('qty,medicines(name,reorder_level)').eq('organization_id',window.CLINIC_ORG_ID)
+      ]);
+      const rows=pq.data||[];
+      const pending=rows.filter(r=>r.status==='pending').length;
+      const dispensed=rows.filter(r=>r.status==='dispensed');
+      const sales=dispensed.reduce((s,r)=>s+(parseFloat(r.amount)||0),0);
+      const totals={};(mb.data||[]).forEach(b=>{const n=b.medicines?.name;if(!n)return;if(!totals[n])totals[n]={t:0,rl:b.medicines?.reorder_level||10};totals[n].t+=(b.qty||0)});
+      const low=Object.values(totals).filter(v=>v.t<=v.rl).length;
+      return [['Pending Dispense',pending,'#f59e0b'],['Dispensed Today',dispensed.length,'#10b981'],["Today's Sales",'Rs.'+sales.toLocaleString(),'#10b981'],['Low Stock Items',low,'#dc2626']];
+    },
+    load:()=>{if(typeof cloudLoadQueues==='function')cloudLoadQueues();if(typeof loadInventory==='function')loadInventory()}
+  },
+  lab:{title:'🔬 Lab Desk',cards:['Pharmacy & Lab Queues'],
+    stats:async()=>{
+      const today=new Date();today.setHours(0,0,0,0);
+      const {data}=await sb.from('lab_queue').select('status').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString());
+      const rows=data||[];
+      const pending=rows.filter(r=>['pending','collected'].includes(r.status)).length;
+      const done=rows.filter(r=>['completed','verified'].includes(r.status)).length;
+      return [['Pending Tests',pending,'#f59e0b'],['Completed Today',done,'#10b981'],['Total Orders',rows.length,'#38bdf8']];
+    },
+    load:()=>{if(typeof cloudLoadQueues==='function')cloudLoadQueues()}
+  }
+};
+window._rwhCurrent=null;
+async function workflowHomeOpen(key){
+  const cfg=RWH_CONFIG[key];if(!cfg)return;
+  window._rwhCurrent=key;
+  qs('roleWorkflowHome').style.display='block';
+  qs('rwhTitle').textContent=cfg.title;
+  const host=qs('rwhContent');host.innerHTML='';
+  cfg.cards.forEach(txt=>{
+    document.querySelectorAll('.card').forEach(card=>{
+      if((card.textContent||'').indexOf(txt)!==-1){
+        if(!card.__homeParent){card.__homeParent=card.parentElement;card.__homeNext=card.nextSibling;card.__homeDisplay=card.style.display}
+        card.style.display='';
+        host.appendChild(card);
+      }
+    });
+  });
+  await workflowHomeRefresh();
+}
+async function workflowHomeRefresh(){
+  const key=window._rwhCurrent;const cfg=RWH_CONFIG[key];if(!cfg)return;
+  try{
+    const stats=await cfg.stats();
+    qs('rwhStats').innerHTML=stats.map(([l,v,c])=>'<div style="background:#fff;border-top:3px solid '+c+';border-radius:10px;padding:10px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.06)"><div style="font-size:20px;font-weight:800;color:#0f172a">'+v+'</div><div style="font-size:10.5px;color:#64748b">'+l+'</div></div>').join('');
+  }catch(e){console.warn('[WorkflowHome stats]',e)}
+  try{cfg.load()}catch(e){}
 }
 </script>
 </body>
