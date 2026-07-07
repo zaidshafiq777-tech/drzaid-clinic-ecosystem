@@ -3795,6 +3795,11 @@ document.addEventListener("DOMContentLoaded",()=>{setTimeout(()=>{try{fdShowView
     <div><button class="light" onclick="dmLoad()">🔄</button> <button class="warning" onclick="qs('doctorModeOverlay').style.display='none'">✖ Band</button></div>
   </div>
   <div id="dmChips" style="display:flex;gap:6px;overflow-x:auto;padding:10px 0"></div>
+  <div id="dmEmptyState" style="display:none;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;text-align:center;color:#64748b">
+    <div style="font-size:15px;font-weight:700;color:#334155">🩺 Aaj Ki Queue Khaali Hai</div>
+    <div style="font-size:12.5px;margin-top:4px">Jaise hi reception koi patient ka token banayegi (vitals ke baad), wo yahan chip ki tarah aa jayega.</div>
+    <div style="margin-top:10px;font-size:12px;color:#94a3b8">Waiting: 0 · Vitals Done: 0 · With Doctor: 0</div>
+  </div>
   <div id="dmPatient" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px;display:none">
     <div id="dmSummary"></div>
     <div id="dmHistory" style="margin-top:6px"></div>
@@ -3824,7 +3829,9 @@ async function dmLoad(){
     const today=new Date();today.setHours(0,0,0,0);
     const {data}=await sb.from('tokens').select('id,token_number,status,visit_id,patient_id,patients(full_name,age,gender),visits(chief_complaint)').eq('organization_id',window.CLINIC_ORG_ID).gte('created_at',today.toISOString()).in('status',['registered','waiting_vitals','vitals_done','waiting_doctor','with_doctor']).order('token_number');
     const rows=data||[];window.DD_ROWS=window.DD_ROWS||{};rows.forEach(r=>DD_ROWS[r.id]=r);
-    qs('dmChips').innerHTML=rows.length?rows.map(t=>'<button class="light" style="white-space:nowrap;padding:8px 14px;border-radius:20px" onclick="dmSelect(\''+t.id+'\')">#'+t.token_number+' '+escapeHtml(t.patients?.full_name||'--')+'</button>').join(''):'<small>Aaj koi patient queue mein nahi.</small>';
+    qs('dmChips').innerHTML=rows.length?rows.map(t=>'<button class="light" style="white-space:nowrap;padding:8px 14px;border-radius:20px" onclick="dmSelect(\''+t.id+'\')">#'+t.token_number+' '+escapeHtml(t.patients?.full_name||'--')+'</button>').join(''):'';
+    const dmEmpty=qs('dmEmptyState');
+    if(dmEmpty)dmEmpty.style.display=rows.length?'none':'block';
   }catch(e){alert('Load fail: '+e.message)}
 }
 async function dmSelect(tid){
@@ -4124,7 +4131,8 @@ async function loadOwnerDashboard(){
 function postLoginRouting(){
   const role=window.CLINIC_SESSION&&window.CLINIC_SESSION.profile?window.CLINIC_SESSION.profile.role:null;
   if(['org_owner','branch_admin','super_admin'].includes(role)){try{ownerDashboardOpen()}catch(e){}return}
-  try{chatShellOpen()}catch(e){}
+  // Workflow screen is primary now; chat is a small collapsible assistant (not fullscreen by default)
+  try{const cf=qs('chatFab');if(cf)cf.style.display='block'}catch(e){}
 }
 </script>
 </body>
