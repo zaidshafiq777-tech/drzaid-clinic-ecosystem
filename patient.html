@@ -49,11 +49,14 @@ button:disabled{opacity:.6}
     <input id="bkAge" placeholder="Umar (saal)" inputmode="numeric">
     <textarea id="bkComplaint" rows="2" placeholder="Masla / shikayat (jaise: bukhar 2 din se)"></textarea>
     <div id="bkPayBox" style="background:#ecfdf5;border:1px solid #10b981;border-radius:10px;padding:10px;margin-bottom:8px;font-size:13.5px">
-      💰 <strong>Advance fee Rs. 300</strong> — <strong id="bkPayNum"></strong> par <strong>JazzCash ya EasyPaisa</strong> se bhejein, phir neeche <strong>Transaction ID (TID)</strong> likhein. Reception verify karegi, phir token milega (30 min ke andar TID na aayi to booking khud cancel).
+      💰 <strong>Advance fee Rs. 300</strong> — Online transfer (<strong id="bkPayNum"></strong> par JazzCash/EasyPaisa + TID) ya <strong>Cash (clinic pe counter par)</strong> — dono options neeche.
     </div>
-    <select id="bkMethod" style="width:100%;padding:11px 12px;border:1px solid #cbd5e1;border-radius:9px;font-size:15px;margin-bottom:8px"><option value="JazzCash">JazzCash</option><option value="EasyPaisa">EasyPaisa</option></select>
-    <input id="bkTid" placeholder="Transaction ID (TID) — payment ke baad milti hai">
-    <input id="bkPayer" placeholder="Jis number se paisa bheja (03xxxxxxxxx)" inputmode="tel">
+    <select id="bkMethod" style="width:100%;padding:11px 12px;border:1px solid #cbd5e1;border-radius:9px;font-size:15px;margin-bottom:8px" onchange="bkMethodChange()"><option value="JazzCash">📱 JazzCash (Online Transfer)</option><option value="EasyPaisa">📱 EasyPaisa (Online Transfer)</option><option value="Cash">💵 Cash — Clinic aa kar counter par dunga</option></select>
+    <div id="bkOnlineFields">
+      <input id="bkTid" placeholder="Transaction ID (TID) — payment ke baad milti hai">
+      <input id="bkPayer" placeholder="Jis number se paisa bheja (03xxxxxxxxx)" inputmode="tel">
+    </div>
+    <div id="bkCashNote" style="display:none;background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;padding:9px;font-size:12.5px;margin-bottom:8px">💵 Aap clinic aa kar counter par fee de sakte hain — token abhi book ho jayega, reception aapke pahunchne par confirm karegi.</div>
     <button id="bkBtn" onclick="bookToken()">Token Hasil Karein</button>
     <div id="bkRes" class="res"></div>
   </div>
@@ -81,14 +84,15 @@ async function bookToken(){
   btn.disabled=true;btn.textContent='Bhej raha hoon...';
   try{
     if(paymentFirstBookingEnabled){
-      const tid=document.getElementById('bkTid').value.trim();
-      const payer=document.getElementById('bkPayer').value.replace(/[^0-9+]/g,'');
       const method=document.getElementById('bkMethod').value;
-      if(!tid){show(res,'err','Pehle Rs. 300 '+payNumber()+' par bhejein, phir <strong>TID</strong> yahan likhein — TID ke baghair booking nahi hoti.');btn.disabled=false;btn.textContent='Token Hasil Karein';return}
+      const isCash=method==='Cash';
+      const tid=isCash?'':document.getElementById('bkTid').value.trim();
+      const payer=isCash?ph:document.getElementById('bkPayer').value.replace(/[^0-9+]/g,'');
+      if(!isCash&&!tid){show(res,'err','Pehle Rs. 300 '+payNumber()+' par bhejein, phir <strong>TID</strong> yahan likhein — TID ke baghair booking nahi hoti. (Ya "Cash" method chunein agar counter par dena hai)');btn.disabled=false;btn.textContent='Token Hasil Karein';return}
       const r=await fetch(BOOKING_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:nm,phone:ph,age:ag,complaint:cm||'Online booking',amount:PAYMENT_CONFIG.AMOUNT,payment_method:method,tid:tid,payer_number:payer})});
       if(!r.ok)throw new Error('Server error '+r.status);
       const d=await r.json();
-      show(res,'ok','⏳ <strong>Booking pending hai</strong> ('+nm+').<br>Reception aapki TID verify karegi — verify hote hi token ban jayega, jo aap neeche <strong>"Apni Baari Check Karein"</strong> se dekh lenge.<br><small>Agar 30 minute mein verify na ho to booking cancel ho jayegi aur raqam clinic se refund/adjust karayi ja sakti hai.</small>');
+      show(res,'ok','⏳ <strong>Booking pending hai</strong> ('+nm+').<br>'+(isCash?'Clinic pahunch kar counter par fee dein — reception confirm karte hi token ban jayega.':'Reception aapki TID verify karegi — verify hote hi token ban jayega.')+' Neeche <strong>"Apni Baari Check Karein"</strong> se dekh lenge.<br><small>30 minute ke andar confirm na ho to booking khud cancel ho jayegi.</small>');
       document.getElementById('stPhone').value=ph;
     }else{
       const r=await fetch("https://drzaid.app.n8n.cloud/webhook/patient-intake",{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:ph,name:nm,age:ag,gender:'',complaint:cm||'Online booking',visit_mode:'in_clinic',source:'online',payment_status:'unpaid'})});
@@ -141,6 +145,12 @@ const PAYMENT_CONFIG={
 };
 const paymentFirstBookingEnabled=true; // OFF karo to purana free-token flow wapas
 function payNumber(){return PAYMENT_CONFIG.PAYMENT_NUMBER==="TO_BE_CONFIGURED"?PAYMENT_CONFIG.DISPLAY_NUMBER:PAYMENT_CONFIG.PAYMENT_NUMBER}
+function bkMethodChange(){
+  const m=document.getElementById('bkMethod').value;
+  const isCash=m==='Cash';
+  document.getElementById('bkOnlineFields').style.display=isCash?'none':'block';
+  document.getElementById('bkCashNote').style.display=isCash?'block':'none';
+}
 const BOOKING_URL="https://drzaid.app.n8n.cloud/webhook/booking-create";
 const RED_FLAGS=/chest pain|seenay (mein|me) dard|dil ka dard|saans (nahi|band|mushkil|phool)|breathing (difficulty|problem)|behosh|unconscious|bleeding|khoon (beh|aa raha)|pregnan\w*.{0,20}(bleed|khoon)|(bleed|khoon).{0,20}pregnan\w*|hamal.{0,15}khoon|fits|seizure|jhatkay|mirgi|stroke|falij|dehydrat|sukhat|(bacha|bachi|baby).{0,25}(doodh|feed).{0,15}(nahi|na)|khudkushi|suicide|self.?harm|khud ko (maarna|nuqsan)/i;
 const DOSE_BLOCK=/antibiotic|dose|dosage|khuraak|injection.{0,15}(kaunsa|kya|dose)|(kaunsi|konsi) (dawa|medicine|goli)|medicine (ka naam|batao)|tablet batao/i;
@@ -173,7 +183,7 @@ async function pcSend(){
     if(PC.mode==='book'){
       if(paymentFirstBookingEnabled){
         PC.mode='tid';
-        pcBubble('💰 Token confirm karne ke liye <strong>Rs. '+PAYMENT_CONFIG.AMOUNT+'</strong> advance bhejein:<br>📱 <strong>'+payNumber()+'</strong> (JazzCash ya EasyPaisa)<br>Payment ke baad jo <strong>Transaction ID (TID)</strong> mile wo yahan likh dein. <small>(30 min ke andar — warna booking cancel ho jati hai)</small>','a');
+        pcBubble('💰 Token confirm karne ke 2 tareeqe:<br>1️⃣ <strong>Online:</strong> Rs. '+PAYMENT_CONFIG.AMOUNT+' bhejein 📱 <strong>'+payNumber()+'</strong> (JazzCash/EasyPaisa) → yahan <strong>Transaction ID (TID)</strong> likhein<br>2️⃣ <strong>Cash:</strong> sirf "cash" likh dein — clinic pahunch kar counter par de dena<br><small>(30 min ke andar confirm na ho to booking cancel ho jati hai)</small>','a');
         return;
       }
       pcBubble('<em>Token ban raha hai...</em>','a');
@@ -185,12 +195,13 @@ async function pcSend(){
       PC.mode='free';PC.ctx.lastIntent='token';return;
     }
     if(PC.mode==='tid'){
-      const tid=v.trim();
-      if(tid.length<4){pcBubble('TID sahi nahi lag rahi — payment ke baad SMS/app mein jo Transaction ID aayi wo likhein. (Cancel karna ho to "cancel" likhein)','a');if(/cancel/i.test(v)){PC.mode='free'}return}
+      const isCash=/^cash$/i.test(v.trim());
+      const tid=isCash?'':v.trim();
+      if(!isCash&&tid.length<4){pcBubble('TID sahi nahi lag rahi — payment ke baad SMS/app mein jo Transaction ID aayi wo likhein, ya sirf "cash" likhein. (Cancel karna ho to "cancel" likhein)','a');if(/cancel/i.test(v)){PC.mode='free'}return}
       pcBubble('<em>Booking bhej raha hoon...</em>','a');
-      const r=await fetch(BOOKING_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:PC.ctx.name,phone:PC.ctx.phone,age:PC.ctx.age,complaint:PC.ctx.complaint,amount:PAYMENT_CONFIG.AMOUNT,payment_method:'JazzCash/EasyPaisa',tid:tid,payer_number:PC.ctx.phone})});
+      const r=await fetch(BOOKING_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:PC.ctx.name,phone:PC.ctx.phone,age:PC.ctx.age,complaint:PC.ctx.complaint,amount:PAYMENT_CONFIG.AMOUNT,payment_method:isCash?'Cash':'JazzCash/EasyPaisa',tid:tid,payer_number:PC.ctx.phone})});
       const d=await r.json();const c=document.getElementById('pcMsgs');c.removeChild(c.lastChild);
-      pcBubble('⏳ <strong>Booking pending hai</strong> — reception aapki TID verify karegi, phir token confirm hoga. "baari check" likh kar dekh sakte hain (verify ke baad token wahan dikhega).','a');
+      pcBubble('⏳ <strong>Booking pending hai</strong> — '+(isCash?'clinic pahunch kar counter par dein':'reception aapki TID verify karegi')+', phir token confirm hoga. "baari check" likh kar dekh sakte hain (verify ke baad token wahan dikhega).','a');
       document.getElementById('stPhone').value=PC.ctx.phone;
       PC.mode='free';PC.ctx.lastIntent='token_paid';return;
     }
