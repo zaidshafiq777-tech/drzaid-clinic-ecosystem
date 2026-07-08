@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Patient Portal — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/shell.js"></script>
+<script>
+(async () => {
+  const session = await dzRequireSession(["org_owner","branch_admin","super_admin","receptionist"]);
+  if (!session) return;
+  dzRenderShell({ activeKey: "patient", title: "Patient Portal", profile: session.profile });
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <h2>Public Patient Website <span class="dz-badge live">Live</span></h2>
+      <div class="sub">This is the live, public-facing site where patients book tokens, chat with the clinic assistant, and check their queue position.</div>
+      <a href="../../patient.html" target="_blank" style="display:inline-block;margin-top:6px;padding:11px 18px;background:var(--clinical-700);color:#fff;border-radius:8px;font-size:13.5px;font-weight:700">Open Patient Website ↗</a>
+      <div class="note" style="margin-top:10px">This links to the existing, working patient site (token booking, safe AI chatbot, payment-first booking). It will be migrated into this module's own files in a later milestone — its logic is reused, not rebuilt.</div>
+    </div>`;
+})();
+</script>
+<script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("../sw.js").catch(()=>{})})}</script>
+</body>
+</html>
