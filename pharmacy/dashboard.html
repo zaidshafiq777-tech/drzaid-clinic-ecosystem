@@ -9,6 +9,7 @@
 <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
 <meta name="theme-color" content="#0B5C46">
 <link rel="stylesheet" href="../shared/theme.css">
+<style>.ai-btn{padding:6px 12px;border:none;border-radius:7px;font-size:11.5px;font-weight:700}</style>
 </head>
 <body>
 <div id="dz-shell-root"></div>
@@ -16,6 +17,7 @@
 <script src="../shared/supabase-client.js"></script>
 <script src="../shared/auth.js"></script>
 <script src="../shared/shell.js"></script>
+<script src="../shared/clinical.js"></script>
 <script src="../shared/ai-manager.js"></script>
 <script src="../shared/automation-manager.js"></script>
 <script src="../shared/command-bar.js"></script>
@@ -34,13 +36,16 @@
       ${dzCard("Medicines In Stock","…")}
     </div>
     <div class="dz-panel">
-      <h2>Dispensing Queue &amp; Inventory <span class="dz-badge soon">Milestone 2/3</span></h2>
-      <div class="sub">The dispensing queue and stock/batch management move into this shell next.</div>
-      ${dzEmptyState("℞","Awaiting live data","Pending prescriptions and inventory will appear here in a later milestone.")}
+      <h2>Dispensing Queue <span class="dz-badge live">Live</span></h2>
+      <div id="pharmQueue"></div>
     </div>`;
+  await dzLoadPharmMetrics();
+  await dzLoadPharmQueue();
+})();
 
+async function dzLoadPharmMetrics() {
   try {
-    const orgId = session.profile.organization_id;
+    const orgId = window.DZ_SESSION.profile.organization_id;
     const [{count:pending}, {count:medicines}] = await Promise.all([
       window.dzSupabase.from("pharmacy_queue").select("id",{count:"exact",head:true}).eq("organization_id",orgId).eq("status","pending"),
       window.dzSupabase.from("medicines").select("id",{count:"exact",head:true}).eq("organization_id",orgId),
@@ -49,7 +54,38 @@
       dzCard("Pending Dispense", pending ?? 0, "Live") +
       dzCard("Medicines In Stock", medicines ?? 0, medicines ? "Live" : "No medicines added yet");
   } catch (e) { console.warn("[Pharmacy] metrics failed", e); }
-})();
+}
+
+async function dzLoadPharmQueue() {
+  const host = document.getElementById("pharmQueue");
+  host.innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">Loading…</div>`;
+  try {
+    const orgId = window.DZ_SESSION.profile.organization_id;
+    const { data, error } = await window.dzSupabase.from("pharmacy_queue")
+      .select("id, medicine_name, dosage, frequency, duration, status, patients(full_name)")
+      .eq("organization_id", orgId).in("status", ["pending","partial"])
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    if (!data || !data.length) { host.innerHTML = dzEmptyState("℞","Queue is empty","Dispensed items appear here once a doctor approves a prescription."); return; }
+    host.innerHTML = data.map(r => `
+      <div style="border:1px solid var(--slate-200);border-radius:8px;padding:10px 14px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div><b>${r.medicine_name}</b> ${r.dosage||''} ${r.frequency||''} ${r.duration||''}<br><span style="font-size:11.5px;color:var(--slate-500)">${r.patients?.full_name||''}</span></div>
+        <div>
+          <button class="ai-btn" style="background:#E6F6EE;color:var(--signal-success)" onclick="dzDispense('${r.id}','dispensed')">Dispense</button>
+          <button class="ai-btn" style="background:#FFF7E6;color:var(--signal-warning)" onclick="dzDispense('${r.id}','partial')">Partial</button>
+          <button class="ai-btn" style="background:#FDECEC;color:var(--signal-critical)" onclick="dzDispense('${r.id}','unavailable')">Unavailable</button>
+        </div>
+      </div>`).join("");
+  } catch (e) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">${e.message}</div>`; }
+}
+
+async function dzDispense(id, action) {
+  try {
+    await window.dzSupabase.from("pharmacy_queue").update({ status: action }).eq("id", id);
+    await dzLoadPharmQueue();
+    await dzLoadPharmMetrics();
+  } catch (e) { alert("Update failed: " + e.message); }
+}
 </script>
 <script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("../sw.js").catch(()=>{})})}</script>
 </body>
