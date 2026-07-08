@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Doctor Workspace — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  .wsGrid{display:grid;grid-template-columns:230px 1fr;gap:14px;align-items:start}
+  @media(max-width:980px){.wsGrid{grid-template-columns:1fr}}
+  .qItem{padding:10px 12px;border-radius:8px;cursor:pointer;margin-bottom:4px;border:1px solid transparent}
+  .qItem:hover{background:var(--slate-50)}
+  .qItem.active{background:var(--clinical-100);border-color:var(--clinical-500)}
+  .qItem .tk{font-family:var(--font-data);font-size:11px;color:var(--slate-500)}
+  .fld{margin-bottom:10px}
+  .fld label{font-size:11.5px;font-weight:600;color:var(--slate-700);display:block;margin-bottom:4px}
+  .fld textarea,.fld input{width:100%;padding:9px 11px;border:1px solid var(--slate-200);border-radius:7px;font-size:13.5px;font-family:inherit;box-sizing:border-box}
+  .fld textarea{min-height:56px;resize:vertical}
+  .ai-btn{padding:7px 12px;background:var(--clinical-100);color:var(--clinical-700);border:none;border-radius:7px;font-size:11.5px;font-weight:700;margin:2px 4px 2px 0}
+  .ai-btn:hover{background:var(--clinical-500);color:#fff}
+  .primary-btn{padding:11px 22px;background:var(--clinical-700);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:13.5px}
+  .med-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:6px;margin-bottom:6px}
+  .med-row input{padding:7px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/clinical.js"></script>
+<script src="../shared/ai-manager.js"></script>
+<script src="../shared/automation-manager.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>
+let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[];
+(async () => {
+  const session = await dzRequireSession(["org_owner","branch_admin","super_admin","doctor"]);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzDoctorId = session.profile.id;
+  dzRenderShell({ activeKey: "doctor", title: "Doctor Workspace", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="wsGrid">
+      <div class="dz-panel" style="padding:12px">
+        <h2 style="font-size:13px;margin-bottom:8px">Your Queue</h2>
+        <div id="dQueue"></div>
+      </div>
+      <div id="dMain">${dzEmptyState("✚","Select a patient","Choose a patient from your queue on the left to begin.")}</div>
+    </div>`;
+  await dzLoadQueue();
+})();
+
+async function dzLoadQueue() {
+  const host = document.getElementById("dQueue");
+  const { data, error } = await window.dzSupabase.from("tokens")
+    .select("id, token_number, visit_id, patient_id, status, patients(full_name, age, gender), visits(chief_complaint)")
+    .eq("organization_id", dzOrgId).in("status", ["waiting_doctor","with_doctor"])
+    .order("token_number");
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  dzQueue = data || [];
+  host.innerHTML = dzQueue.length ? dzQueue.map((t,i) =>
+    `<div class="qItem ${dzSelected?.id===t.id?'active':''}" onclick="dzOpenPatient(${i})">
+       <div class="tk">#${t.token_number} &middot; ${t.status==='with_doctor'?'In progress':'Waiting'}</div>
+       <div style="font-weight:600;font-size:13px">${t.patients?.full_name||''}</div>
+       <div style="font-size:11.5px;color:var(--slate-500)">${t.visits?.chief_complaint||''}</div>
+     </div>`).join("") : `<div style="font-size:12px;color:var(--slate-500)">Queue is empty.</div>`;
+}
+
+async function dzOpenPatient(i) {
+  dzSelected = dzQueue[i];
+  dzMeds = [{name:"",dosage:"",frequency:"",duration:""}];
+  await window.dzSupabase.from("tokens").update({ status: "with_doctor" }).eq("id", dzSelected.id);
+  await dzLoadQueue();
+
+  const [{data:vitalsRows}, {data:history}] = await Promise.all([
+    window.dzSupabase.from("vitals").select("*").eq("visit_id", dzSelected.visit_id).order("created_at",{ascending:false}).limit(1),
+    window.dzSupabase.from("prescriptions").select("diagnosis, created_at").eq("patient_id", dzSelected.patient_id).order("created_at",{ascending:false}).limit(3),
+  ]);
+  const v = (vitalsRows||[])[0];
+  const vitalsLine = v ? `BP ${v.bp||'-'} · Pulse ${v.pulse||'-'} · Temp ${v.temperature||'-'} · SpO2 ${v.spo2||'-'}` + (v.is_abnormal ? ' <span class="dz-badge" style="background:#FDECEC;color:var(--signal-critical)">Abnormal</span>' : '') : 'No vitals recorded';
+  const histLine = (history&&history.length) ? history.map(h=>`${new Date(h.created_at).toLocaleDateString()}: ${h.diagnosis||'—'}`).join('<br>') : 'No previous visits.';
+
+  document.getElementById("dMain").innerHTML = `
+    <div class="dz-panel">
+      <h2>${dzSelected.patients?.full_name} <span style="font-weight:400;color:var(--slate-500);font-size:12.5px">#${dzSelected.token_number} · ${dzSelected.patients?.age||'?'}y · ${dzSelected.patients?.gender||'-'}</span></h2>
+      <div class="sub">Complaint: ${dzSelected.visits?.chief_complaint||'-'}</div>
+      <div style="font-size:12.5px;margin-bottom:6px"><b>Vitals:</b> ${vitalsLine}</div>
+      <div style="font-size:12.5px"><b>Previous visits:</b><br>${histLine}</div>
+    </div>
+    <div class="dz-panel">
+      <h2>Consultation</h2>
+      <div class="fld"><label>Chief Complaint</label><textarea id="pComplaints">${dzSelected.visits?.chief_complaint||''}</textarea></div>
+      <div class="fld"><label>History / Examination</label><textarea id="pExam"></textarea></div>
+      <div class="fld"><label>Diagnosis</label><input id="pDiag"></div>
+      <div class="fld"><label>Differential Diagnosis</label><input id="pDDx"></div>
+      <div class="fld"><label>Medicines</label><div id="medsHost"></div><button class="ai-btn" onclick="dzAddMedRow()">+ Add Medicine</button></div>
+      <div class="fld"><label>Investigations</label><input id="pInvest"></div>
+      <div class="fld"><label>Advice</label><textarea id="pAdvice"></textarea></div>
+      <div class="fld"><label>Follow-up (days from today, blank = none)</label><input id="pFollowup" type="number"></div>
+      <div class="fld"><label>Referral (optional)</label><input id="pReferral"></div>
+
+      <div style="background:var(--clinical-50);border:1px solid var(--clinical-100);border-radius:8px;padding:12px;margin:14px 0">
+        <div style="font-size:12px;font-weight:700;color:var(--clinical-700);margin-bottom:6px">AI Assist — every action is a draft. You approve before anything is saved as final.</div>
+        <button class="ai-btn" onclick="dzAiAction('soap')">Generate SOAP Note</button>
+        <button class="ai-btn" onclick="dzAiAction('diagnosis')">Suggest Diagnosis</button>
+        <button class="ai-btn" onclick="dzAiAction('prescription')">Draft Prescription</button>
+        <button class="ai-btn" onclick="dzAiAction('redflags')">Check Red Flags</button>
+        <button class="ai-btn" onclick="dzAiAction('urdu')">Urdu Patient Advice</button>
+        <button class="ai-btn" onclick="dzAiAction('followup')">Follow-up Plan</button>
+        <div id="aiOut" style="margin-top:8px;font-size:12.5px;white-space:pre-wrap"></div>
+        <div style="font-size:10.5px;color:var(--slate-500);margin-top:6px">Drug-interaction checking is not available — it requires a licensed interaction database, not currently integrated. See DATABASE_CHANGES_REQUIRED.md.</div>
+      </div>
+
+      <button class="primary-btn" onclick="dzApprovePrescription()">Approve &amp; Save Prescription</button>
+      <div id="rxStatus" style="margin-top:10px;font-size:12.5px"></div>
+    </div>`;
+  dzRenderMeds();
+}
+
+function dzRenderMeds() {
+  document.getElementById("medsHost").innerHTML = dzMeds.map((m,i) => `
+    <div class="med-row">
+      <input placeholder="Medicine" value="${m.name}" onchange="dzMeds[${i}].name=this.value">
+      <input placeholder="Dosage" value="${m.dosage}" onchange="dzMeds[${i}].dosage=this.value">
+      <input placeholder="Frequency" value="${m.frequency}" onchange="dzMeds[${i}].frequency=this.value">
+      <input placeholder="Duration" value="${m.duration}" onchange="dzMeds[${i}].duration=this.value">
+      <button onclick="dzMeds.splice(${i},1);dzRenderMeds()" style="border:none;background:none;color:var(--signal-critical);cursor:pointer">✕</button>
+    </div>`).join("");
+}
+function dzAddMedRow() { dzMeds.push({name:"",dosage:"",frequency:"",duration:""}); dzRenderMeds(); }
+
+async function dzAiAction(kind) {
+  const out = document.getElementById("aiOut");
+  const ctx = `Patient: ${dzSelected.patients?.full_name}, ${dzSelected.patients?.age}y ${dzSelected.patients?.gender}. Complaint: ${document.getElementById('pComplaints').value}. Exam/History: ${document.getElementById('pExam').value}. Diagnosis so far: ${document.getElementById('pDiag').value}.`;
+  const prompts = {
+    soap: `Write a concise SOAP note (Subjective, Objective, Assessment, Plan) for a Pakistani GP clinic based on: ${ctx}`,
+    diagnosis: `Suggest 2-3 likely diagnoses (most likely first) based on: ${ctx}. Return as a short list, no explanation beyond one line each.`,
+    prescription: `As a clinical scribe, draft medicines (name, dose, frequency, duration) appropriate for: ${ctx}. Return as a short plain list, doctor will review before saving.`,
+    redflags: `List any red-flag / urgent-referral symptoms implied by: ${ctx}. If none, say "No red flags identified from the given information."`,
+    urdu: `Write 2-3 sentences of patient advice in Roman Urdu for: ${ctx}. Simple, reassuring, practical home-care and when to return.`,
+    followup: `Suggest an appropriate follow-up plan (days, and what to check) for: ${ctx}. One or two sentences.`,
+  };
+  out.textContent = "Thinking…";
+  const r = await AI.ask(prompts[kind]);
+  out.textContent = r.ok ? r.text : `AI unavailable right now (${r.error}). This is a live status, not a script.`;
+}
+
+async function dzApprovePrescription() {
+  const status = document.getElementById("rxStatus");
+  const diag = document.getElementById("pDiag").value.trim();
+  if (!diag) { status.innerHTML = `<span style="color:var(--signal-critical)">Diagnosis is required before approving.</span>`; return; }
+  status.textContent = "Saving…";
+  try {
+    const followDays = parseInt(document.getElementById("pFollowup").value, 10);
+    const { data: rx, error: rErr } = await window.dzSupabase.from("prescriptions").insert({
+      organization_id: dzOrgId, visit_id: dzSelected.visit_id, patient_id: dzSelected.patient_id, doctor_id: dzDoctorId,
+      complaints: document.getElementById("pComplaints").value || null,
+      examination: document.getElementById("pExam").value || null,
+      diagnosis: diag,
+      differential_diagnosis: document.getElementById("pDDx").value || null,
+      investigations: document.getElementById("pInvest").value || null,
+      advice: document.getElementById("pAdvice").value || null,
+      referral: document.getElementById("pReferral").value || null,
+      follow_up_date: followDays ? new Date(Date.now()+followDays*86400000).toISOString().slice(0,10) : null,
+      approved: true, approved_at: new Date().toISOString(),
+    }).select("id").single();
+    if (rErr) throw rErr;
+
+    const meds = dzMeds.filter(m => m.name.trim());
+    if (meds.length) {
+      const { error: iErr } = await window.dzSupabase.from("prescription_items").insert(
+        meds.map(m => ({ prescription_id: rx.id, medicine_name: m.name, dosage: m.dosage, frequency: m.frequency, duration: m.duration }))
+      );
+      if (iErr) throw iErr;
+      for (const m of meds) {
+        await window.dzSupabase.from("pharmacy_queue").insert({
+          organization_id: dzOrgId, prescription_id: rx.id, visit_id: dzSelected.visit_id, patient_id: dzSelected.patient_id,
+          medicine_name: m.name, dosage: m.dosage, frequency: m.frequency, duration: m.duration, status: "pending",
+        });
+      }
+    }
+    if (followDays) {
+      await window.dzSupabase.from("followups").insert({
+        organization_id: dzOrgId, patient_id: dzSelected.patient_id, visit_id: dzSelected.visit_id,
+        due_date: new Date(Date.now()+followDays*86400000).toISOString().slice(0,10),
+        reason: diag, status: "scheduled",
+      });
+    }
+    await window.dzSupabase.from("tokens").update({ status: "doctor_done" }).eq("id", dzSelected.id);
+    status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Prescription approved and routed to pharmacy.</span>`;
+    dzSelected = null;
+    document.getElementById("dMain").innerHTML = dzEmptyState("✚","Saved","Select the next patient from the queue.");
+    await dzLoadQueue();
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--signal-critical)">Save failed: ${e.message}</span>`;
+  }
+}
+</script>
+</body>
+</html>
