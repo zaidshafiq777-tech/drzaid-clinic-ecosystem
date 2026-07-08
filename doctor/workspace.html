@@ -25,6 +25,21 @@
   .primary-btn{padding:11px 22px;background:var(--clinical-700);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:13.5px}
   .med-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:6px;margin-bottom:6px}
   .med-row input{padding:7px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px}
+  .wsCols{display:grid;grid-template-columns:1fr 340px;gap:14px;align-items:start}
+  @media(max-width:1200px){.wsCols{grid-template-columns:1fr}}
+  .listenerBox{background:var(--clinical-50);border:1px solid var(--clinical-100);border-radius:10px;padding:14px;margin-bottom:14px}
+  .listen-btn{padding:9px 16px;border:none;border-radius:8px;font-size:12.5px;font-weight:700;margin:0 6px 6px 0}
+  .listen-btn.start{background:var(--signal-success);color:#fff}
+  .listen-btn.pause{background:var(--signal-warning);color:#fff}
+  .listen-btn.stop{background:var(--signal-critical);color:#fff}
+  .listen-btn.ghost{background:#fff;border:1px solid var(--slate-200);color:var(--slate-700)}
+  .listen-btn:disabled{opacity:.4}
+  .transcriptBox{width:100%;min-height:90px;border:1px solid var(--slate-200);border-radius:8px;padding:10px;font-size:12.5px;font-family:inherit;box-sizing:border-box;resize:vertical}
+  .warnBar{padding:8px 12px;border-radius:7px;font-size:12px;margin-bottom:6px}
+  .warnBar.critical{background:#FDECEC;color:var(--signal-critical)}
+  .warnBar.warning{background:#FFF7E6;color:var(--signal-warning)}
+  .warnBar.info{background:#E8F1FB;color:var(--signal-info)}
+  .warnBar.note{background:var(--slate-100);color:var(--slate-500)}
 </style>
 </head>
 <body>
@@ -38,6 +53,10 @@
 <script src="../shared/automation-manager.js"></script>
 <script src="../shared/command-bar.js"></script>
 <script src="../shared/ai-copilot.js"></script>
+<script src="../shared/voice-listener.js"></script>
+<script src="../shared/prescription-agent.js"></script>
+<script src="../shared/prescription-safety.js"></script>
+<script src="../shared/prescription-renderer.js"></script>
 <script>
 let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[];
 (async () => {
@@ -63,7 +82,7 @@ let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[];
 async function dzLoadQueue() {
   const host = document.getElementById("dQueue");
   const { data, error } = await window.dzSupabase.from("tokens")
-    .select("id, token_number, visit_id, patient_id, status, patients(full_name, age, gender), visits(chief_complaint)")
+    .select("id, token_number, visit_id, patient_id, status, patients(id, full_name, age, gender, phone, emr_number), visits(chief_complaint)")
     .eq("organization_id", dzOrgId).in("status", ["waiting_doctor","with_doctor"])
     .order("token_number");
   if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
@@ -79,24 +98,60 @@ async function dzLoadQueue() {
 async function dzOpenPatient(i) {
   dzSelected = dzQueue[i];
   dzMeds = [{name:"",dosage:"",frequency:"",duration:""}];
+  dzTranscriptFinal = ""; dzListener = null;
   await window.dzSupabase.from("tokens").update({ status: "with_doctor" }).eq("id", dzSelected.id);
   await dzLoadQueue();
 
-  const [{data:vitalsRows}, {data:history}] = await Promise.all([
+  const [{data:vitalsRows}, {data:history}, {data:allergies}, {data:chronic}, {data:activeMeds}] = await Promise.all([
     window.dzSupabase.from("vitals").select("*").eq("visit_id", dzSelected.visit_id).order("created_at",{ascending:false}).limit(1),
     window.dzSupabase.from("prescriptions").select("diagnosis, created_at").eq("patient_id", dzSelected.patient_id).order("created_at",{ascending:false}).limit(3),
+    window.dzSupabase.from("allergies").select("allergy, severity").eq("patient_id", dzSelected.patient_id),
+    window.dzSupabase.from("chronic_conditions").select("condition").eq("patient_id", dzSelected.patient_id),
+    window.dzSupabase.from("active_medications").select("medicine_name").eq("patient_id", dzSelected.patient_id).eq("active", true),
   ]);
   const v = (vitalsRows||[])[0];
   const vitalsLine = v ? `BP ${v.bp||'-'} · Pulse ${v.pulse||'-'} · Temp ${v.temperature||'-'} · SpO2 ${v.spo2||'-'}` + (v.is_abnormal ? ' <span class="dz-badge" style="background:#FDECEC;color:var(--signal-critical)">Abnormal</span>' : '') : 'No vitals recorded';
   const histLine = (history&&history.length) ? history.map(h=>`${new Date(h.created_at).toLocaleDateString()}: ${h.diagnosis||'—'}`).join('<br>') : 'No previous visits.';
+  const allergyLine = (allergies&&allergies.length) ? allergies.map(a=>a.allergy+(a.severity?` (${a.severity})`:'')).join(', ') : 'None on file';
+  const chronicLine = (chronic&&chronic.length) ? chronic.map(c=>c.condition).join(', ') : 'None on file';
+  const activeMedLine = (activeMeds&&activeMeds.length) ? activeMeds.map(m=>m.medicine_name).join(', ') : 'None on file';
 
   document.getElementById("dMain").innerHTML = `
     <div class="dz-panel">
       <h2>${dzSelected.patients?.full_name} <span style="font-weight:400;color:var(--slate-500);font-size:12.5px">#${dzSelected.token_number} · ${dzSelected.patients?.age||'?'}y · ${dzSelected.patients?.gender||'-'}</span></h2>
       <div class="sub">Complaint: ${dzSelected.visits?.chief_complaint||'-'}</div>
-      <div style="font-size:12.5px;margin-bottom:6px"><b>Vitals:</b> ${vitalsLine}</div>
+      <div style="font-size:12.5px;margin-bottom:4px"><b>Vitals:</b> ${vitalsLine}</div>
+      <div style="font-size:12.5px;margin-bottom:4px"><b>Allergies:</b> ${allergyLine}</div>
+      <div style="font-size:12.5px;margin-bottom:4px"><b>Chronic conditions:</b> ${chronicLine}</div>
+      <div style="font-size:12.5px;margin-bottom:4px"><b>Current medicines:</b> ${activeMedLine}</div>
       <div style="font-size:12.5px"><b>Previous visits:</b><br>${histLine}</div>
     </div>
+
+    <div class="listenerBox">
+      <h2 style="font-size:13.5px;margin-bottom:6px">🎙 Live Consultation Listener</h2>
+      <div style="font-size:11.5px;color:var(--slate-500);margin-bottom:8px" id="listenerSupportNote"></div>
+      <div style="margin-bottom:8px">
+        <select id="listenLang" style="padding:6px 8px;border-radius:6px;border:1px solid var(--slate-200);font-size:12px">
+          <option value="ur-PK">Roman Urdu / Urdu</option>
+          <option value="en-US">English</option>
+        </select>
+        <span id="listenStatus" style="font-size:12px;color:var(--slate-500);margin-left:8px">Not started</span>
+        <span id="listenTimer" style="font-size:12px;font-family:var(--font-data);margin-left:8px"></span>
+      </div>
+      <div>
+        <button class="listen-btn start" id="btnStart" onclick="dzStartListening()">● START</button>
+        <button class="listen-btn pause" id="btnPause" onclick="dzPauseListening()" disabled>PAUSE</button>
+        <button class="listen-btn ghost" id="btnResume" onclick="dzResumeListening()" disabled style="display:none">RESUME</button>
+        <button class="listen-btn stop" id="btnStop" onclick="dzStopAndAnalyze()" disabled>STOP &amp; ANALYZE</button>
+      </div>
+      <div style="margin-top:8px">
+        <label style="font-size:11px;font-weight:600;color:var(--slate-700)">Transcript (editable — correct anything before analyzing)</label>
+        <textarea id="transcriptBox" class="transcriptBox"></textarea>
+      </div>
+      <div id="analyzeStatus" style="font-size:12px;margin-top:6px"></div>
+    </div>
+
+    <div class="wsCols">
     <div class="dz-panel">
       <h2>Consultation</h2>
       <div class="fld"><label>Chief Complaint</label><textarea id="pComplaints">${dzSelected.visits?.chief_complaint||''}</textarea></div>
@@ -114,6 +169,7 @@ async function dzOpenPatient(i) {
         <button class="ai-btn" onclick="dzAiAction('soap')">Generate SOAP Note</button>
         <button class="ai-btn" onclick="dzAiAction('diagnosis')">Suggest Diagnosis</button>
         <button class="ai-btn" onclick="dzAiAction('prescription')">Draft Prescription</button>
+
         <button class="ai-btn" onclick="dzAiAction('redflags')">Check Red Flags</button>
         <button class="ai-btn" onclick="dzAiAction('urdu')">Urdu Patient Advice</button>
         <button class="ai-btn" onclick="dzAiAction('followup')">Follow-up Plan</button>
@@ -123,8 +179,23 @@ async function dzOpenPatient(i) {
 
       <button class="primary-btn" onclick="dzApprovePrescription()">Approve &amp; Save Prescription</button>
       <div id="rxStatus" style="margin-top:10px;font-size:12.5px"></div>
+    </div>
+
+    <div class="dz-panel">
+      <h2>Prescription Preview</h2>
+      <div class="sub">Appears after Stop &amp; Analyze, or after manual AI Assist drafting. Always editable on the left before saving.</div>
+      <div id="rxWarnings"></div>
+      <div id="rxPreviewHost">${dzEmptyState("📝","No draft yet","Start the consultation listener, or fill the form and use AI Assist.")}</div>
+      <div id="rxPreviewActions" style="margin-top:10px;display:none">
+        <button class="ai-btn" onclick="dzStopAndAnalyze(true)">Regenerate</button>
+        <button class="ai-btn" onclick="dzPrintPrescription()">Print</button>
+        <button class="ai-btn" onclick="alert('PDF export requires a rendering library not yet added — use Print → Save as PDF from the browser print dialog for now.')">Export PDF</button>
+        <button class="ai-btn" onclick="alert('WhatsApp sending requires a WhatsApp Business API account — not connected yet. See MANUAL_SETUP_REQUIRED.md.')">Send WhatsApp Summary</button>
+      </div>
+    </div>
     </div>`;
   dzRenderMeds();
+  dzInitListenerUI();
 }
 
 function dzRenderMeds() {
@@ -151,6 +222,129 @@ function dzReadMedsFromDom() {
   return out;
 }
 function dzAddMedRow() { dzMeds.push({name:"",dosage:"",frequency:"",duration:""}); dzRenderMeds(); }
+
+// ============================================================
+// Milestone 4 — Live Consultation Listener + AI Prescription Generator
+// ============================================================
+let dzListener = null, dzTranscriptFinal = "", dzListenStart = null, dzListenTimerHandle = null, dzListenSeconds = 0;
+
+function dzInitListenerUI() {
+  const supported = dzSpeechSupported();
+  const note = document.getElementById("listenerSupportNote");
+  if (!supported) {
+    note.innerHTML = `Browser voice recognition not supported. Please use Chrome, or type/paste the transcript manually below and click "STOP & ANALYZE".`;
+    document.getElementById("btnStart").disabled = true;
+    document.getElementById("btnStop").disabled = false; // manual transcript mode always works
+  } else {
+    note.textContent = "Free browser speech recognition (Chrome). Manual editing is always available.";
+  }
+}
+
+function dzFormatTimer(sec) {
+  const m = String(Math.floor(sec/60)).padStart(2,"0"), s = String(sec%60).padStart(2,"0");
+  return `${m}:${s}`;
+}
+
+function dzStartListening() {
+  const lang = document.getElementById("listenLang").value;
+  dzListener = dzCreateVoiceListener({
+    lang,
+    onInterim: (text) => {
+      document.getElementById("transcriptBox").value = dzTranscriptFinal + " " + text;
+    },
+    onFinal: (text) => {
+      dzTranscriptFinal += text;
+      document.getElementById("transcriptBox").value = dzTranscriptFinal;
+    },
+  });
+  if (dzListener) dzListener.start();
+  document.getElementById("listenStatus").textContent = dzListener ? "● Listening…" : "Manual mode (no voice support)";
+  document.getElementById("btnStart").disabled = true;
+  document.getElementById("btnPause").disabled = !dzListener;
+  document.getElementById("btnStop").disabled = false;
+  dzListenSeconds = 0;
+  clearInterval(dzListenTimerHandle);
+  dzListenTimerHandle = setInterval(() => {
+    dzListenSeconds++;
+    document.getElementById("listenTimer").textContent = dzFormatTimer(dzListenSeconds);
+  }, 1000);
+}
+
+function dzPauseListening() {
+  if (dzListener) dzListener.pause();
+  clearInterval(dzListenTimerHandle);
+  document.getElementById("listenStatus").textContent = "Paused";
+  document.getElementById("btnPause").style.display = "none";
+  document.getElementById("btnResume").style.display = "inline-block";
+  document.getElementById("btnResume").disabled = false;
+}
+
+function dzResumeListening() {
+  if (dzListener) dzListener.resume();
+  document.getElementById("listenStatus").textContent = "● Listening…";
+  document.getElementById("btnPause").style.display = "inline-block";
+  document.getElementById("btnResume").style.display = "none";
+  dzListenTimerHandle = setInterval(() => {
+    dzListenSeconds++;
+    document.getElementById("listenTimer").textContent = dzFormatTimer(dzListenSeconds);
+  }, 1000);
+}
+
+async function dzStopAndAnalyze(isRegenerate) {
+  if (dzListener) dzListener.stop();
+  clearInterval(dzListenTimerHandle);
+  document.getElementById("listenStatus").textContent = "Stopped";
+  document.getElementById("btnStart").disabled = false;
+  document.getElementById("btnPause").disabled = true;
+  document.getElementById("btnStop").disabled = true;
+
+  const transcript = document.getElementById("transcriptBox").value.trim();
+  const analyzeStatus = document.getElementById("analyzeStatus");
+  if (!transcript && !isRegenerate) {
+    analyzeStatus.innerHTML = `<span style="color:var(--slate-500)">No transcript recorded — type or paste one above, then click STOP &amp; ANALYZE again.</span>`;
+    return;
+  }
+  analyzeStatus.innerHTML = `<span style="color:var(--slate-500)">Analyzing consultation with AI…</span>`;
+  document.getElementById("rxPreviewHost").innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">Generating draft…</div>`;
+
+  try {
+    const context = await dzGatherConsultationContext(dzSelected.patients, { id: dzSelected.visit_id, chief_complaint: dzSelected.visits?.chief_complaint }, dzSelected);
+    context.demographics.emr = context.demographics.emr; // already set
+    const r = await dzGeneratePrescriptionFromConsultation(transcript, context);
+    if (!r.ok) {
+      analyzeStatus.innerHTML = `<span style="color:var(--signal-critical)">${r.error}</span>`;
+      document.getElementById("rxPreviewHost").innerHTML = dzEmptyState("⚠","Could not generate draft", r.error);
+      return;
+    }
+    dzLastDraft = r.data;
+    dzLastContext = context;
+
+    // Populate the existing (already-working) manual form fields with the AI draft — same save path, no duplicate logic.
+    document.getElementById("pComplaints").value = r.data.chief_complaint || "";
+    document.getElementById("pExam").value = [r.data.history, r.data.examination].filter(Boolean).join("\n");
+    document.getElementById("pDiag").value = r.data.provisional_diagnosis || "";
+    document.getElementById("pDDx").value = (r.data.differential_diagnosis||[]).join(", ");
+    document.getElementById("pInvest").value = (r.data.investigations||[]).join(", ");
+    document.getElementById("pAdvice").value = [r.data.advice_english, r.data.advice_urdu].filter(Boolean).join("\n\n");
+    document.getElementById("pReferral").value = (r.data.referral && r.data.referral !== "Not clearly mentioned") ? r.data.referral : "";
+    dzMeds = (r.data.medicines||[]).map(m => ({ name: [m.name,m.strength].filter(Boolean).join(" "), dosage: m.dose||"", frequency: m.frequency||"", duration: m.duration||"" }));
+    if (!dzMeds.length) dzMeds = [{name:"",dosage:"",frequency:"",duration:""}];
+    dzRenderMeds();
+
+    // Safety warnings — real, computed from real data.
+    const warnings = dzRunSafetyChecks(r.data, context);
+    document.getElementById("rxWarnings").innerHTML = warnings.map(w => `<div class="warnBar ${w.level}">${dzEsc(w.text)}</div>`).join("");
+
+    // Printable preview.
+    document.getElementById("rxPreviewHost").innerHTML = dzRenderPrescriptionPreview(r.data, dzSelected.patients, { id: dzSelected.visit_id });
+    document.getElementById("rxPreviewActions").style.display = "block";
+
+    analyzeStatus.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Draft generated — review the form on the left, edit anything, then Approve &amp; Save.</span>`;
+  } catch (e) {
+    analyzeStatus.innerHTML = `<span style="color:var(--signal-critical)">Analysis failed: ${e.message}</span>`;
+  }
+}
+let dzLastDraft = null, dzLastContext = null;
 
 async function dzAiAction(kind) {
   const out = document.getElementById("aiOut");
