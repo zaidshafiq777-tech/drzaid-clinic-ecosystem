@@ -16,16 +16,27 @@
 <script src="../shared/supabase-client.js"></script>
 <script src="../shared/auth.js"></script>
 <script src="../shared/shell.js"></script>
+<script src="../shared/ai-manager.js"></script>
+<script src="../shared/automation-manager.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
 <script>
 (async () => {
   const session = await dzRequireSession(["org_owner","branch_admin","super_admin"]);
   if (!session) return;
   dzRenderShell({ activeKey: "settings", title: "Settings", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
 
   document.getElementById("dz-content").innerHTML = `
     <div class="dz-panel">
+      <h2>API &amp; Integrations <span class="dz-badge live">Live status</span></h2>
+      <div class="sub">Real connection status for every provider — nothing here is faked.</div>
+      <a href="api-settings.html" style="display:inline-block;padding:10px 16px;background:var(--clinical-700);color:#fff;border-radius:8px;font-size:13px;font-weight:700">Open API &amp; Integrations ↗</a>
+    </div>
+    <div class="dz-panel">
       <h2>Clinic Settings <span class="dz-badge soon">Coming soon</span></h2>
-      <div class="sub">Staff accounts, clinic profile, payment configuration and AI provider settings will be managed here.</div>
+      <div class="sub">Staff accounts, clinic profile and payment configuration will be managed here.</div>
       ${dzEmptyState("⚙","Not implemented yet","Settings management is planned for a later milestone. Staff accounts are currently managed directly by the Founder.")}
     </div>`;
 })();
