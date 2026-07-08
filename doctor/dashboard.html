@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Doctor Workspace — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/shell.js"></script>
+<script>
+(async () => {
+  const session = await dzRequireSession(["org_owner","branch_admin","super_admin","doctor"]);
+  if (!session) return;
+  dzRenderShell({ activeKey: "doctor", title: "Doctor Workspace", profile: session.profile });
+
+  const content = document.getElementById("dz-content");
+  content.innerHTML = `<div class="dz-grid" id="metrics">
+      ${dzCard("Waiting For You","…")}
+      ${dzCard("Prescriptions Today","…")}
+    </div>
+    <div class="dz-panel">
+      <h2>Patient Queue &amp; Prescription Builder <span class="dz-badge soon">Milestone 2/3</span></h2>
+      <div class="sub">Clinical memory, AI-assisted drafting and the prescription builder move into this shell next.</div>
+      ${dzEmptyState("✚","Awaiting live data","Your patient queue and consultation workspace will appear here once Patient Registration &amp; Token Queue (Milestone 2) is complete.")}
+    </div>`;
+
+  try {
+    const orgId = session.profile.organization_id;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const [{data:tokenRows}, {count:rxToday}] = await Promise.all([
+      window.dzSupabase.from("tokens").select("status").eq("organization_id",orgId).gte("created_at",today.toISOString()),
+      window.dzSupabase.from("prescriptions").select("id",{count:"exact",head:true}).eq("organization_id",orgId).gte("created_at",today.toISOString()),
+    ]);
+    const waiting = (tokenRows||[]).filter(t=>["waiting_doctor","with_doctor"].includes(t.status)).length;
+    document.getElementById("metrics").innerHTML =
+      dzCard("Waiting For You", waiting, "Live") +
+      dzCard("Prescriptions Today", rxToday ?? 0, "Live");
+  } catch (e) { console.warn("[Doctor] metrics failed", e); }
+})();
+</script>
+<script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("../sw.js").catch(()=>{})})}</script>
+</body>
+</html>
