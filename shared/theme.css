@@ -1,0 +1,126 @@
+/* ============================================================
+   Dr. Zaid Healthcare Operating System — Design Tokens
+   Clinical, precise, trustworthy. No decoration without purpose.
+   ============================================================ */
+:root{
+  /* Primary — refined from the clinic's existing established green (brand continuity) */
+  --clinical-900:#062A20;
+  --clinical-700:#0B5C46;
+  --clinical-600:#0E6B52;
+  --clinical-500:#15806A;
+  --clinical-100:#E4F3EE;
+  --clinical-50:#F2FAF7;
+
+  /* Neutrals — cool slate, not warm cream: precision over comfort */
+  --slate-900:#1A2027;
+  --slate-700:#3A4550;
+  --slate-500:#64748B;
+  --slate-300:#C3CDD6;
+  --slate-200:#E2E8F0;
+  --slate-100:#EEF2F5;
+  --slate-50:#F7F9FA;
+  --white:#FFFFFF;
+
+  /* Functional signal colors — meaning, not mood */
+  --signal-success:#0E8A5F;
+  --signal-warning:#B9770E;
+  --signal-critical:#C0362C;
+  --signal-info:#2563A8;
+
+  /* Type */
+  --font-ui: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-data: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+
+  /* Scale */
+  --radius-sm:6px;
+  --radius-md:10px;
+  --radius-lg:16px;
+  --shadow-card:0 1px 2px rgba(6,42,32,.06), 0 1px 8px rgba(6,42,32,.04);
+  --shadow-raised:0 4px 16px rgba(6,42,32,.10);
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font-family:var(--font-ui);
+  background:var(--slate-50);
+  color:var(--slate-900);
+  -webkit-font-smoothing:antialiased;
+  font-size:15px;
+  line-height:1.5;
+}
+h1,h2,h3{margin:0;font-weight:700;letter-spacing:-0.01em}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer}
+
+/* ---------- App shell: sidebar + topbar ---------- */
+.dz-shell{display:flex;min-height:100vh}
+.dz-sidebar{
+  width:232px;flex-shrink:0;background:var(--clinical-900);color:var(--white);
+  display:flex;flex-direction:column;position:fixed;top:0;bottom:0;left:0;
+  transition:transform .2s ease;z-index:40;
+}
+.dz-sidebar-brand{display:flex;align-items:center;gap:10px;padding:20px 18px;border-bottom:1px solid rgba(255,255,255,.08)}
+.dz-sidebar-brand img{width:30px;height:30px;border-radius:7px}
+.dz-sidebar-brand .name{font-size:14.5px;font-weight:700;line-height:1.25}
+.dz-sidebar-brand .tag{font-size:10.5px;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.06em}
+.dz-nav{flex:1;padding:14px 10px;overflow-y:auto}
+.dz-nav a{
+  display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--radius-sm);
+  font-size:13.5px;font-weight:600;color:rgba(255,255,255,.72);margin-bottom:2px;
+}
+.dz-nav a:hover{background:rgba(255,255,255,.06);color:var(--white)}
+.dz-nav a.active{background:var(--clinical-600);color:var(--white)}
+.dz-nav .icon{width:18px;text-align:center;opacity:.9}
+.dz-sidebar-foot{padding:14px 16px;border-top:1px solid rgba(255,255,255,.08);font-size:11.5px;color:rgba(255,255,255,.4)}
+
+.dz-main{margin-left:232px;flex:1;min-width:0;display:flex;flex-direction:column}
+.dz-topbar{
+  height:60px;background:var(--white);border-bottom:1px solid var(--slate-200);
+  display:flex;align-items:center;justify-content:space-between;padding:0 22px;position:sticky;top:0;z-index:30;
+}
+.dz-topbar-title{font-size:15.5px;font-weight:700;color:var(--slate-900)}
+.dz-topbar-right{display:flex;align-items:center;gap:14px}
+.dz-clock{font-family:var(--font-data);font-size:12px;color:var(--slate-500)}
+.dz-live{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--signal-success)}
+.dz-live .dot{width:7px;height:7px;border-radius:50%;background:var(--signal-success);animation:dz-pulse 2s ease-in-out infinite}
+@keyframes dz-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.dz-user{display:flex;align-items:center;gap:8px;font-size:13px}
+.dz-user .who{text-align:right;line-height:1.25}
+.dz-user .who b{display:block;font-size:12.5px;color:var(--slate-900)}
+.dz-user .who span{font-size:10.5px;color:var(--slate-500);text-transform:uppercase;letter-spacing:.04em}
+.dz-avatar{width:32px;height:32px;border-radius:50%;background:var(--clinical-100);color:var(--clinical-700);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12.5px}
+.dz-logout{font-size:12px;font-weight:600;color:var(--slate-500);padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--slate-200);background:var(--white)}
+.dz-logout:hover{background:var(--slate-50);color:var(--slate-900)}
+
+.dz-content{padding:22px;flex:1}
+
+@media (max-width:820px){
+  .dz-sidebar{transform:translateX(-100%)}
+  .dz-sidebar.open{transform:translateX(0)}
+  .dz-main{margin-left:0}
+  .dz-menu-btn{display:inline-flex !important}
+}
+
+/* ---------- Widgets ---------- */
+.dz-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:20px}
+.dz-card{background:var(--white);border:1px solid var(--slate-200);border-radius:var(--radius-md);padding:16px;box-shadow:var(--shadow-card)}
+.dz-card .label{font-size:11.5px;font-weight:600;color:var(--slate-500);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+.dz-card .value{font-family:var(--font-data);font-size:26px;font-weight:700;color:var(--slate-900)}
+.dz-card .value.muted{color:var(--slate-300)}
+.dz-card .note{font-size:11.5px;color:var(--slate-500);margin-top:4px}
+
+.dz-panel{background:var(--white);border:1px solid var(--slate-200);border-radius:var(--radius-md);padding:20px;margin-bottom:16px}
+.dz-panel h2{font-size:14.5px;margin-bottom:4px}
+.dz-panel .sub{font-size:12.5px;color:var(--slate-500);margin-bottom:14px}
+
+.dz-empty{text-align:center;padding:36px 20px;color:var(--slate-500)}
+.dz-empty .glyph{font-size:26px;margin-bottom:8px;opacity:.5}
+.dz-empty .title{font-size:13.5px;font-weight:600;color:var(--slate-700);margin-bottom:4px}
+.dz-empty .desc{font-size:12.5px;max-width:340px;margin:0 auto}
+
+.dz-badge{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.03em}
+.dz-badge.soon{background:var(--slate-100);color:var(--slate-500)}
+.dz-badge.live{background:var(--clinical-100);color:var(--clinical-700)}
+
+.dz-menu-btn{display:none;background:none;border:none;font-size:20px;color:var(--slate-700);padding:4px 8px}
