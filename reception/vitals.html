@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vitals — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  .vf{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:14px 0}
+  .vf .fld label{font-size:11px;font-weight:600;color:var(--slate-700);display:block;margin-bottom:4px}
+  .vf .fld input{width:100%;padding:9px;border:1px solid var(--slate-200);border-radius:7px;font-size:14px;box-sizing:border-box}
+  .primary-btn{padding:11px 20px;background:var(--clinical-700);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:13.5px}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/clinical.js"></script>
+<script src="../shared/ai-manager.js"></script>
+<script src="../shared/automation-manager.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>
+let dzOrgId=null, dzQueueRows=[];
+(async () => {
+  const session = await dzRequireSession(["org_owner","branch_admin","super_admin","receptionist","billing"]);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "reception", title: "Vitals Entry", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <h2>Patients Awaiting Vitals</h2>
+      <div id="pendingList"></div>
+    </div>
+    <div class="dz-panel" id="vitalsForm" style="display:none">
+      <h2 id="vfPatientName"></h2>
+      <div class="vf">
+        <div class="fld"><label>BP (e.g. 120/80)</label><input id="vBp"></div>
+        <div class="fld"><label>Pulse (/min)</label><input id="vPulse" type="number"></div>
+        <div class="fld"><label>Temp (°F)</label><input id="vTemp" type="number" step="0.1"></div>
+        <div class="fld"><label>SpO2 (%)</label><input id="vSpo2" type="number"></div>
+        <div class="fld"><label>RBS/FBS (mg/dL)</label><input id="vSugar" type="number"></div>
+        <div class="fld"><label>Weight (kg)</label><input id="vWeight" type="number" step="0.1"></div>
+        <div class="fld"><label>Height (cm) <span style="font-weight:400;color:var(--slate-500)">— BMI only, not saved</span></label><input id="vHeight" type="number"></div>
+      </div>
+      <div id="bmiOut" style="font-size:12.5px;color:var(--slate-500);margin-bottom:10px"></div>
+      <button class="primary-btn" onclick="dzSaveVitals()">Save Vitals</button>
+      <div id="vitalsStatus" style="margin-top:10px;font-size:12.5px"></div>
+    </div>`;
+
+  ["vWeight","vHeight"].forEach(id => document.getElementById(id).addEventListener("input", dzUpdateBMI));
+  await dzLoadPending();
+})();
+
+function dzUpdateBMI() {
+  const w = parseFloat(document.getElementById("vWeight").value);
+  const h = parseFloat(document.getElementById("vHeight").value);
+  const bmi = dzComputeBMI(w, h);
+  document.getElementById("bmiOut").textContent = bmi ? `BMI: ${bmi}` : "";
+}
+
+async function dzLoadPending() {
+  const host = document.getElementById("pendingList");
+  host.innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">Loading…</div>`;
+  const { data, error } = await window.dzSupabase.from("tokens")
+    .select("id, token_number, visit_id, patient_id, patients(full_name, age, gender)")
+    .eq("organization_id", dzOrgId).in("status", ["registered","waiting_vitals"])
+    .order("token_number");
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">${error.message}</div>`; return; }
+  dzQueueRows = data || [];
+  if (!dzQueueRows.length) { host.innerHTML = dzEmptyState("♥","No one waiting","Patients appear here once registered."); return; }
+  host.innerHTML = dzQueueRows.map((t,i) => `<div class="match-card" style="border:1px solid var(--slate-200);border-radius:8px;padding:10px 14px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+      <span><b>#${t.token_number}</b> ${t.patients?.full_name || ""} (${t.patients?.age||"?"}, ${t.patients?.gender||"-"})</span>
+      <button class="primary-btn" style="padding:7px 14px" onclick="dzOpenVitals(${i})">Enter Vitals</button>
+    </div>`).join("");
+}
+
+let dzSelectedToken = null;
+function dzOpenVitals(i) {
+  dzSelectedToken = dzQueueRows[i];
+  document.getElementById("vitalsForm").style.display = "block";
+  document.getElementById("vfPatientName").textContent = `#${dzSelectedToken.token_number} — ${dzSelectedToken.patients?.full_name || ""}`;
+  document.getElementById("vitalsForm").scrollIntoView({ behavior: "smooth" });
+}
+
+async function dzSaveVitals() {
+  if (!dzSelectedToken) return;
+  const v = {
+    bp: document.getElementById("vBp").value.trim() || null,
+    pulse: document.getElementById("vPulse").value || null,
+    temperature: document.getElementById("vTemp").value || null,
+    spo2: document.getElementById("vSpo2").value || null,
+    rbs_fbs: document.getElementById("vSugar").value || null,
+    weight: document.getElementById("vWeight").value || null,
+  };
+  const check = dzCheckVitalsAbnormal(v);
+  const status = document.getElementById("vitalsStatus");
+  status.textContent = "Saving…";
+  try {
+    const { error: vErr } = await window.dzSupabase.from("vitals").insert({
+      organization_id: dzOrgId, visit_id: dzSelectedToken.visit_id, patient_id: dzSelectedToken.patient_id,
+      ...v, is_abnormal: check.isAbnormal,
+      recorded_by: window.DZ_SESSION.user.id,
+    });
+    if (vErr) throw vErr;
+    await window.dzSupabase.from("tokens").update({ status: "vitals_done" }).eq("id", dzSelectedToken.id);
+    status.innerHTML = check.isAbnormal
+      ? `<span style="color:var(--signal-warning);font-weight:700">⚠ Abnormal: ${check.flags.join(", ")} — saved, doctor will be flagged.</span>`
+      : `<span style="color:var(--signal-success);font-weight:700">✓ Vitals saved — normal range.</span>`;
+    document.getElementById("vitalsForm").style.display = "none";
+    await dzLoadPending();
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--signal-critical)">Save failed: ${e.message}</span>`;
+  }
+}
+</script>
+</body>
+</html>
