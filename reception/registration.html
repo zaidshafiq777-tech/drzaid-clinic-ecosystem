@@ -76,20 +76,24 @@ let dzOrgId = null;
 })();
 
 let dzMatches = [];
+function dzNormalizePhone(p) { return String(p||"").replace(/[^0-9]/g, ""); }
+
 async function dzCheckDuplicate() {
-  const phone = document.getElementById("phoneInput").value.trim();
+  const rawPhone = document.getElementById("phoneInput").value.trim();
+  const phone = dzNormalizePhone(rawPhone);
   const box = document.getElementById("dupResults");
   if (!phone || phone.length < 6) { box.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">Enter a valid phone number.</div>`; return; }
   box.innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">Checking existing records…</div>`;
   try {
-    // Real check 1: exact phone match. Real check 2: name-similarity is only meaningful once we have a name,
-    // so at this stage we check phone (exact/partial) only — the most reliable signal available in the current schema.
-    const { data, error } = await window.dzSupabase
+    // Fetch candidates with a broad partial match, then compare digits-only client-side.
+    // This is robust to different formatting (dashes/spaces) between visits — the
+    // earlier version compared raw strings and missed matches for this exact reason.
+    const { data: allCandidates, error } = await window.dzSupabase
       .from("patients")
       .select("id, full_name, age, gender, phone, emr_number, created_at")
       .eq("organization_id", dzOrgId)
-      .ilike("phone", `%${phone}%`)
-      .limit(5);
+      .limit(500);
+    const data = (allCandidates || []).filter(p => dzNormalizePhone(p.phone).includes(phone) || phone.includes(dzNormalizePhone(p.phone)));
     if (error) throw error;
     if (!data || !data.length) {
       box.innerHTML = `<div style="font-size:12.5px;color:var(--signal-success);margin-bottom:10px">No existing patient found with this number.</div>`;
@@ -140,7 +144,7 @@ async function dzOpenForm(phone, existing) {
 
 async function dzSaveRegistration() {
   const name = document.getElementById("fName").value.trim();
-  const phone = document.getElementById("fPhone").value.trim();
+  const phone = dzNormalizePhone(document.getElementById("fPhone").value.trim());
   const complaint = document.getElementById("fComplaint").value.trim();
   const status = document.getElementById("saveStatus");
   if (!name || !phone || !complaint) { status.innerHTML = `<span style="color:var(--signal-critical)">Name, phone and chief complaint are required.</span>`; return; }
