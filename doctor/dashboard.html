@@ -16,11 +16,17 @@
 <script src="../shared/supabase-client.js"></script>
 <script src="../shared/auth.js"></script>
 <script src="../shared/shell.js"></script>
+<script src="../shared/ai-manager.js"></script>
+<script src="../shared/automation-manager.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
 <script>
 (async () => {
   const session = await dzRequireSession(["org_owner","branch_admin","super_admin","doctor"]);
   if (!session) return;
   dzRenderShell({ activeKey: "doctor", title: "Doctor Workspace", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
 
   const content = document.getElementById("dz-content");
   content.innerHTML = `<div class="dz-grid" id="metrics">
