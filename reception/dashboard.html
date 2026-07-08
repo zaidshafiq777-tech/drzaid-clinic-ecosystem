@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reception — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/shell.js"></script>
+<script>
+(async () => {
+  const session = await dzRequireSession(["org_owner","branch_admin","super_admin","receptionist","billing"]);
+  if (!session) return;
+  dzRenderShell({ activeKey: "reception", title: "Reception", profile: session.profile });
+
+  const content = document.getElementById("dz-content");
+  content.innerHTML = `<div class="dz-grid" id="metrics">
+      ${dzCard("Today's Tokens","…")}
+      ${dzCard("Waiting Now","…")}
+      ${dzCard("Pending Payments","…")}
+    </div>
+    <div class="dz-panel">
+      <h2>Token Queue &amp; Registration <span class="dz-badge soon">Milestone 2</span></h2>
+      <div class="sub">Patient registration, token creation and the live queue board move into this shell next.</div>
+      ${dzEmptyState("▤","Awaiting live data","New-patient intake and the token queue will appear here in Milestone 2.")}
+    </div>`;
+
+  try {
+    const orgId = session.profile.organization_id;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const [{count:tokensToday}, {data:waitingRows}, {count:pending}] = await Promise.all([
+      window.dzSupabase.from("tokens").select("id",{count:"exact",head:true}).eq("organization_id",orgId).gte("created_at",today.toISOString()),
+      window.dzSupabase.from("tokens").select("status").eq("organization_id",orgId).gte("created_at",today.toISOString()),
+      window.dzSupabase.from("bookings").select("id",{count:"exact",head:true}).eq("organization_id",orgId).eq("status","pending_payment"),
+    ]);
+    const waiting = (waitingRows||[]).filter(t=>["registered","waiting_vitals","vitals_done","waiting_doctor","with_doctor"].includes(t.status)).length;
+    document.getElementById("metrics").innerHTML =
+      dzCard("Today's Tokens", tokensToday ?? 0, "Live") +
+      dzCard("Waiting Now", waiting, "Live") +
+      dzCard("Pending Payments", pending ?? 0, "Live — online bookings");
+  } catch (e) { console.warn("[Reception] metrics failed", e); }
+})();
+</script>
+<script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("../sw.js").catch(()=>{})})}</script>
+</body>
+</html>
