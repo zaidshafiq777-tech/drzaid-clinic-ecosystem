@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>API &amp; Integrations — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  .prov-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+  .prov{background:#fff;border:1px solid var(--slate-200);border-radius:var(--radius-md);padding:14px}
+  .prov .top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px}
+  .prov .name{font-size:13.5px;font-weight:700}
+  .prov .desc{font-size:11.5px;color:var(--slate-500);margin-bottom:10px;min-height:28px}
+  .st{font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:20px;text-transform:uppercase;letter-spacing:.03em}
+  .st.on{background:#E6F6EE;color:var(--signal-success)}
+  .st.off{background:var(--slate-100);color:var(--slate-500)}
+  .testbtn{font-size:11.5px;font-weight:600;padding:6px 10px;border-radius:7px;border:1px solid var(--slate-200);background:var(--slate-50)}
+  .testbtn:hover{background:var(--slate-100)}
+  .detail{font-size:11px;color:var(--slate-500);margin-top:8px;font-family:var(--font-data)}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/ai-manager.js"></script>
+<script src="../shared/automation-manager.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>
+(async () => {
+  const session = await dzRequireSession(["org_owner","branch_admin","super_admin"]);
+  if (!session) return;
+  dzRenderShell({ activeKey: "settings", title: "API & Integrations", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  const providers = [
+    { key: "supabase", name: "Supabase (Database + Auth)", desc: "Patient records, tokens, RLS, staff auth.", testable: true },
+    { key: "gemini",   name: "Gemini AI", desc: "Doctor drafts, patient chatbot, stock intake — via n8n proxy.", testable: true },
+    { key: "n8n",      name: "n8n Automations", desc: "Server-side workflow engine.", testable: false, staticList: true },
+    { key: "openai",   name: "OpenAI", desc: "Not connected — no credential configured.", testable: false },
+    { key: "claude",   name: "Claude", desc: "Not connected — no credential configured.", testable: false },
+    { key: "groq",     name: "Groq (direct)", desc: "Used only as an internal Gemini fallback today, not user-selectable yet.", testable: false },
+    { key: "openrouter", name: "OpenRouter", desc: "Not connected — no credential configured.", testable: false },
+    { key: "ollama",   name: "Ollama (local)", desc: "Not connected — requires a local/self-hosted endpoint.", testable: false },
+    { key: "github",   name: "GitHub Deployment", desc: "Not connected — requires a backend status proxy (not built yet).", testable: false },
+    { key: "smtp",     name: "SMTP / Email", desc: "Not connected — no credential configured.", testable: false },
+    { key: "whatsapp", name: "WhatsApp Business API", desc: "Not connected — requires a Meta Business account.", testable: false },
+    { key: "google",   name: "Google (Calendar / Meet / Drive)", desc: "Not connected — requires OAuth app setup.", testable: false },
+    { key: "zoom",     name: "Zoom", desc: "Not connected — requires a Zoom app + OAuth.", testable: false },
+  ];
+
+  const grid = document.getElementById("dz-content");
+  grid.innerHTML = `<div class="dz-panel">
+    <h2>Connected Services</h2>
+    <div class="sub">Real status only. Nothing below is marked Connected unless it was just tested live.</div>
+    <div class="prov-grid" id="provGrid"></div>
+  </div>`;
+
+  const provGrid = document.getElementById("provGrid");
+  providers.forEach((p) => {
+    const el = document.createElement("div");
+    el.className = "prov";
+    el.id = `prov-${p.key}`;
+    el.innerHTML = `
+      <div class="top"><span class="name">${p.name}</span><span class="st off" id="st-${p.key}">Not Connected</span></div>
+      <div class="desc">${p.desc}</div>
+      ${p.testable ? `<button class="testbtn" onclick="dzTestProvider('${p.key}')">Test Connection</button>` : ""}
+      <div class="detail" id="detail-${p.key}"></div>
+    `;
+    provGrid.appendChild(el);
+  });
+
+  // Supabase: real check — the session/profile load that already happened IS the test.
+  document.getElementById("st-supabase").className = "st on";
+  document.getElementById("st-supabase").textContent = "Connected";
+  document.getElementById("detail-supabase").textContent = "Verified — this page loaded your session and profile from it.";
+
+  // n8n: show the real, actually-wired automation list (no fake "active/inactive" claim).
+  const auts = Automation.list();
+  document.getElementById("detail-n8n").innerHTML =
+    "Configured server-side endpoints:<br>" + auts.map(a => "• " + a.name).join("<br>") +
+    "<br><span style='color:var(--slate-500)'>Live run-status per workflow requires a backend status proxy — not built yet.</span>";
+
+  window.dzTestProvider = async (key) => {
+    const stEl = document.getElementById(`st-${key}`);
+    const detEl = document.getElementById(`detail-${key}`);
+    stEl.textContent = "Testing…";
+    if (key === "gemini") {
+      const r = await AI.testConnection();
+      stEl.className = "st " + (r.connected ? "on" : "off");
+      stEl.textContent = r.connected ? "Connected" : "Not Connected";
+      detEl.textContent = `${r.detail} · ${r.latencyMs}ms`;
+    }
+  };
+})();
+</script>
+</body>
+</html>
