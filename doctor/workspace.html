@@ -130,12 +130,25 @@ async function dzOpenPatient(i) {
 function dzRenderMeds() {
   document.getElementById("medsHost").innerHTML = dzMeds.map((m,i) => `
     <div class="med-row">
-      <input placeholder="Medicine" value="${m.name}" onchange="dzMeds[${i}].name=this.value">
-      <input placeholder="Dosage" value="${m.dosage}" onchange="dzMeds[${i}].dosage=this.value">
-      <input placeholder="Frequency" value="${m.frequency}" onchange="dzMeds[${i}].frequency=this.value">
-      <input placeholder="Duration" value="${m.duration}" onchange="dzMeds[${i}].duration=this.value">
+      <input placeholder="Medicine" value="${m.name}" data-i="${i}" data-f="name" oninput="dzMeds[${i}].name=this.value">
+      <input placeholder="Dosage" value="${m.dosage}" data-i="${i}" data-f="dosage" oninput="dzMeds[${i}].dosage=this.value">
+      <input placeholder="Frequency" value="${m.frequency}" data-i="${i}" data-f="frequency" oninput="dzMeds[${i}].frequency=this.value">
+      <input placeholder="Duration" value="${m.duration}" data-i="${i}" data-f="duration" oninput="dzMeds[${i}].duration=this.value">
       <button onclick="dzMeds.splice(${i},1);dzRenderMeds()" style="border:none;background:none;color:var(--signal-critical);cursor:pointer">✕</button>
     </div>`).join("");
+}
+/** Safety net: read medicine rows straight from the DOM, in case any input's
+ *  live-sync was missed (e.g. value set programmatically, autofill, voice-fill). */
+function dzReadMedsFromDom() {
+  const rows = document.querySelectorAll("#medsHost .med-row");
+  const out = [];
+  rows.forEach(row => {
+    const inputs = row.querySelectorAll("input[data-f]");
+    const m = {name:"",dosage:"",frequency:"",duration:""};
+    inputs.forEach(inp => { m[inp.dataset.f] = inp.value; });
+    out.push(m);
+  });
+  return out;
 }
 function dzAddMedRow() { dzMeds.push({name:"",dosage:"",frequency:"",duration:""}); dzRenderMeds(); }
 
@@ -176,6 +189,7 @@ async function dzApprovePrescription() {
     }).select("id").single();
     if (rErr) throw rErr;
 
+    dzMeds = dzReadMedsFromDom(); // re-sync from DOM before saving - fixes medicines not saving if typed without clicking away
     const meds = dzMeds.filter(m => m.name.trim());
     if (meds.length) {
       const { error: iErr } = await window.dzSupabase.from("prescription_items").insert(
