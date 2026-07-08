@@ -9,6 +9,7 @@
 <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
 <meta name="theme-color" content="#0B5C46">
 <link rel="stylesheet" href="../shared/theme.css">
+<style>.primary-link{padding:8px 14px;background:var(--clinical-700);color:#fff;border-radius:7px;font-size:12.5px;font-weight:700}.ghost-refresh{padding:8px 14px;background:#fff;border:1px solid var(--slate-200);border-radius:7px;font-size:12.5px;font-weight:600}</style>
 </head>
 <body>
 <div id="dz-shell-root"></div>
@@ -16,6 +17,7 @@
 <script src="../shared/supabase-client.js"></script>
 <script src="../shared/auth.js"></script>
 <script src="../shared/shell.js"></script>
+<script src="../shared/clinical.js"></script>
 <script src="../shared/ai-manager.js"></script>
 <script src="../shared/automation-manager.js"></script>
 <script src="../shared/command-bar.js"></script>
@@ -35,13 +37,23 @@
       ${dzCard("Pending Payments","…")}
     </div>
     <div class="dz-panel">
-      <h2>Token Queue &amp; Registration <span class="dz-badge soon">Milestone 2</span></h2>
-      <div class="sub">Patient registration, token creation and the live queue board move into this shell next.</div>
-      ${dzEmptyState("▤","Awaiting live data","New-patient intake and the token queue will appear here in Milestone 2.")}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <h2 style="margin:0">Live Token Queue</h2>
+        <div style="display:flex;gap:8px">
+          <a href="registration.html" class="primary-link">+ Register Patient</a>
+          <button class="ghost-refresh" onclick="dzLoadQueue()">Refresh</button>
+        </div>
+      </div>
+      <div class="sub">In-clinic and online patients in one unified queue.</div>
+      <div id="queueTable"></div>
     </div>`;
+  await dzLoadQueue();
+  await dzLoadMetrics();
+})();
 
+async function dzLoadMetrics() {
   try {
-    const orgId = session.profile.organization_id;
+    const orgId = window.DZ_SESSION.profile.organization_id;
     const today = new Date(); today.setHours(0,0,0,0);
     const [{count:tokensToday}, {data:waitingRows}, {count:pending}] = await Promise.all([
       window.dzSupabase.from("tokens").select("id",{count:"exact",head:true}).eq("organization_id",orgId).gte("created_at",today.toISOString()),
@@ -54,7 +66,40 @@
       dzCard("Waiting Now", waiting, "Live") +
       dzCard("Pending Payments", pending ?? 0, "Live — online bookings");
   } catch (e) { console.warn("[Reception] metrics failed", e); }
-})();
+}
+
+async function dzLoadQueue() {
+  const host = document.getElementById("queueTable");
+  if (!host) return;
+  host.innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">Loading…</div>`;
+  try {
+    const orgId = window.DZ_SESSION.profile.organization_id;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const { data, error } = await window.dzSupabase
+      .from("tokens")
+      .select("id, token_number, status, source, priority, payment_status, created_at, patients(full_name), visits(visit_mode, chief_complaint)")
+      .eq("organization_id", orgId)
+      .gte("created_at", today.toISOString())
+      .order("token_number", { ascending: true });
+    if (error) throw error;
+    if (!data || !data.length) { host.innerHTML = dzEmptyState("▤","No patients yet today","Register a patient to start today's queue."); return; }
+    host.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="text-align:left;color:var(--slate-500);font-size:11px;text-transform:uppercase">
+        <th style="padding:8px 6px">Token</th><th>Patient</th><th>Visit</th><th>Status</th><th>Waiting</th><th>Payment</th>
+      </tr></thead>
+      <tbody>${data.map(t => `
+        <tr style="border-top:1px solid var(--slate-100)">
+          <td style="padding:8px 6px;font-family:var(--font-data)">#${t.token_number}</td>
+          <td>${t.patients?.full_name || "—"}</td>
+          <td>${t.visits?.visit_mode === "online" ? "Online" : "In-Clinic"}</td>
+          <td><span class="dz-badge live">${DZ_TOKEN_STATUS_LABEL[t.status] || t.status}</span></td>
+          <td>${dzWaitingMinutes(t.created_at)} min</td>
+          <td>${t.payment_status}</td>
+        </tr>`).join("")}</tbody></table>`;
+  } catch (e) {
+    host.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">Failed to load queue: ${e.message}</div>`;
+  }
+}
 </script>
 <script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("../sw.js").catch(()=>{})})}</script>
 </body>
