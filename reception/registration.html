@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Patient Registration — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .form-grid.full{grid-template-columns:1fr}
+  .fld label{font-size:11.5px;font-weight:600;color:var(--slate-700);display:block;margin-bottom:4px}
+  .fld input,.fld select,.fld textarea{width:100%;padding:9px 11px;border:1px solid var(--slate-200);border-radius:7px;font-size:13.5px;font-family:inherit;box-sizing:border-box}
+  .fld.disabled input{background:var(--slate-50);color:var(--slate-500)}
+  .fld .hint{font-size:10.5px;color:var(--slate-500);margin-top:3px}
+  .match-card{border:1px solid var(--slate-200);border-radius:8px;padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+  .primary-btn{padding:11px 20px;background:var(--clinical-700);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:13.5px}
+  .primary-btn:disabled{opacity:.5}
+  .ghost-btn{padding:9px 16px;background:#fff;border:1px solid var(--slate-200);border-radius:8px;font-weight:600;font-size:12.5px}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/clinical.js"></script>
+<script src="../shared/ai-manager.js"></script>
+<script src="../shared/automation-manager.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>
+let dzOrgId = null;
+(async () => {
+  const session = await dzRequireSession(["org_owner","branch_admin","super_admin","receptionist","billing"]);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "reception", title: "New Patient Registration", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel" id="phoneStep">
+      <h2>Step 1 — Phone Number</h2>
+      <div class="sub">Enter the patient's phone number first. We check for an existing record before creating a new one.</div>
+      <div style="display:flex;gap:8px;max-width:420px">
+        <input id="phoneInput" placeholder="03xxxxxxxxx" style="flex:1;padding:11px;border:1px solid var(--slate-200);border-radius:8px;font-size:14px">
+        <button class="primary-btn" onclick="dzCheckDuplicate()">Check</button>
+      </div>
+      <div id="dupResults" style="margin-top:14px"></div>
+    </div>
+    <div class="dz-panel" id="formStep" style="display:none">
+      <h2>Step 2 — Patient Details</h2>
+      <div class="sub" id="emrPreview"></div>
+      <div class="form-grid">
+        <div class="fld"><label>Full Name *</label><input id="fName"></div>
+        <div class="fld"><label>Age</label><input id="fAge" type="number" min="0"></div>
+        <div class="fld"><label>Gender</label><select id="fGender"><option value="">Select</option><option>Male</option><option>Female</option><option>Other</option></select></div>
+        <div class="fld"><label>Phone *</label><input id="fPhone"></div>
+        <div class="fld" style="grid-column:1/-1"><label>Address</label><input id="fAddress"></div>
+        <div class="fld disabled"><label>CNIC</label><input disabled placeholder="Not available yet"><div class="hint">Requires a database migration — see DATABASE_CHANGES_REQUIRED.md</div></div>
+        <div class="fld disabled"><label>Guardian Name</label><input disabled placeholder="Not available yet"><div class="hint">Requires a database migration</div></div>
+        <div class="fld"><label>Chief Complaint (for this visit) *</label><input id="fComplaint"></div>
+        <div class="fld"><label>Visit Type</label><select id="fVisitMode"><option value="in_clinic">In-Clinic</option><option value="online">Online</option></select></div>
+      </div>
+      <div style="margin-top:16px;display:flex;gap:10px">
+        <button class="primary-btn" id="saveBtn" onclick="dzSaveRegistration()">Save &amp; Create Token</button>
+        <button class="ghost-btn" onclick="location.reload()">Cancel</button>
+      </div>
+      <div id="saveStatus" style="margin-top:10px;font-size:12.5px"></div>
+    </div>`;
+})();
+
+let dzMatches = [];
+async function dzCheckDuplicate() {
+  const phone = document.getElementById("phoneInput").value.trim();
+  const box = document.getElementById("dupResults");
+  if (!phone || phone.length < 6) { box.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">Enter a valid phone number.</div>`; return; }
+  box.innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">Checking existing records…</div>`;
+  try {
+    // Real check 1: exact phone match. Real check 2: name-similarity is only meaningful once we have a name,
+    // so at this stage we check phone (exact/partial) only — the most reliable signal available in the current schema.
+    const { data, error } = await window.dzSupabase
+      .from("patients")
+      .select("id, full_name, age, gender, phone, emr_number, created_at")
+      .eq("organization_id", dzOrgId)
+      .ilike("phone", `%${phone}%`)
+      .limit(5);
+    if (error) throw error;
+    if (!data || !data.length) {
+      box.innerHTML = `<div style="font-size:12.5px;color:var(--signal-success);margin-bottom:10px">No existing patient found with this number.</div>`;
+      dzOpenForm(phone, null);
+      return;
+    }
+    box.innerHTML = `<div style="font-size:12.5px;font-weight:600;margin-bottom:8px">Possible existing patient(s) found:</div>`;
+    dzMatches = data;
+    data.forEach((p, i) => {
+      const row = document.createElement("div");
+      row.className = "match-card";
+      row.innerHTML = `<div><b>${p.full_name}</b> &middot; ${p.age || "?"} yrs &middot; ${p.gender || "-"} &middot; ${p.phone}<br><span style="font-size:11px;color:var(--slate-500)">EMR: ${p.emr_number || "—"} &middot; Registered ${new Date(p.created_at).toLocaleDateString()}</span></div>
+        <button class="ghost-btn" onclick="dzUseExisting(${i})">Use This Patient</button>`;
+      box.appendChild(row);
+    });
+    const anyway = document.createElement("button");
+    anyway.className = "ghost-btn";
+    anyway.style.marginTop = "6px";
+    anyway.textContent = "None of these — Create New Patient Anyway";
+    anyway.onclick = () => dzOpenForm(phone, null);
+    box.appendChild(anyway);
+  } catch (e) {
+    box.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">Search failed: ${e.message}</div>`;
+  }
+}
+
+let dzExistingPatient = null;
+function dzUseExisting(i) {
+  dzExistingPatient = dzMatches[i];
+  dzOpenForm(dzExistingPatient.phone, dzExistingPatient);
+}
+
+async function dzOpenForm(phone, existing) {
+  document.getElementById("formStep").style.display = "block";
+  document.getElementById("fPhone").value = phone;
+  if (existing) {
+    document.getElementById("fName").value = existing.full_name || "";
+    document.getElementById("fAge").value = existing.age || "";
+    document.getElementById("fGender").value = existing.gender || "";
+    document.getElementById("emrPreview").textContent = `Using existing patient — EMR ${existing.emr_number || "—"}`;
+  } else {
+    dzExistingPatient = null;
+    const next = await dzNextEmrNumber(dzOrgId);
+    document.getElementById("emrPreview").textContent = `New patient — EMR will be assigned: ${next}`;
+  }
+  document.getElementById("formStep").scrollIntoView({ behavior: "smooth" });
+}
+
+async function dzSaveRegistration() {
+  const name = document.getElementById("fName").value.trim();
+  const phone = document.getElementById("fPhone").value.trim();
+  const complaint = document.getElementById("fComplaint").value.trim();
+  const status = document.getElementById("saveStatus");
+  if (!name || !phone || !complaint) { status.innerHTML = `<span style="color:var(--signal-critical)">Name, phone and chief complaint are required.</span>`; return; }
+  const btn = document.getElementById("saveBtn");
+  btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    let patientId = dzExistingPatient?.id;
+    if (!patientId) {
+      const emr = await dzNextEmrNumber(dzOrgId);
+      const { data: newPatient, error: pErr } = await window.dzSupabase.from("patients").insert({
+        organization_id: dzOrgId,
+        full_name: name,
+        age: document.getElementById("fAge").value || null,
+        gender: document.getElementById("fGender").value || null,
+        phone, address: document.getElementById("fAddress").value || null,
+        emr_number: emr,
+      }).select("id").single();
+      if (pErr) throw pErr;
+      patientId = newPatient.id;
+    }
+    const { data: visit, error: vErr } = await window.dzSupabase.from("visits").insert({
+      organization_id: dzOrgId, patient_id: patientId,
+      visit_mode: document.getElementById("fVisitMode").value,
+      chief_complaint: complaint, status: "registered",
+    }).select("id").single();
+    if (vErr) throw vErr;
+
+    const today = new Date(); today.setHours(0,0,0,0);
+    const { count: todaysCount } = await window.dzSupabase.from("tokens").select("id",{count:"exact",head:true})
+      .eq("organization_id", dzOrgId).gte("created_at", today.toISOString());
+
+    const { data: token, error: tErr } = await window.dzSupabase.from("tokens").insert({
+      organization_id: dzOrgId, patient_id: patientId, visit_id: visit.id,
+      token_number: (todaysCount || 0) + 1, source: "reception", priority: "normal",
+      payment_status: "unpaid", status: "registered",
+    }).select("token_number").single();
+    if (tErr) throw tErr;
+
+    status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Token #${token.token_number} created for ${name}.</span>`;
+    setTimeout(() => (window.location.href = "dashboard.html"), 1200);
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--signal-critical)">Save failed: ${e.message}</span>`;
+    btn.disabled = false; btn.textContent = "Save & Create Token";
+  }
+}
+</script>
+</body>
+</html>
