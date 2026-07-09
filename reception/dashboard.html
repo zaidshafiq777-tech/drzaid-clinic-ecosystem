@@ -18,6 +18,7 @@
 <script src="../shared/auth.js"></script>
 <script src="../shared/shell.js"></script>
 <script src="../shared/clinical.js"></script>
+<script src="../shared/visit-status.js"></script>
 <script src="../shared/ai-manager.js"></script>
 <script src="../shared/automation-manager.js"></script>
 <script src="../shared/command-bar.js"></script>
@@ -85,19 +86,35 @@ async function dzLoadQueue() {
     if (!data || !data.length) { host.innerHTML = dzEmptyState("▤","No patients yet today","Register a patient to start today's queue."); return; }
     host.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead><tr style="text-align:left;color:var(--slate-500);font-size:11px;text-transform:uppercase">
-        <th style="padding:8px 6px">Token</th><th>Patient</th><th>Visit</th><th>Status</th><th>Waiting</th><th>Payment</th>
+        <th style="padding:8px 6px">Token</th><th>Patient</th><th>Visit</th><th>Status</th><th>Waiting</th><th>Payment</th><th>Action</th>
       </tr></thead>
-      <tbody>${data.map(t => `
+      <tbody>${data.map(t => {
+        const canSend = [DZ_STATUS.REGISTERED, DZ_STATUS.WAITING_VITALS, DZ_STATUS.VITALS_DONE].includes(t.status);
+        return `
         <tr style="border-top:1px solid var(--slate-100)">
           <td style="padding:8px 6px;font-family:var(--font-data)">#${t.token_number}</td>
           <td>${t.patients?.full_name || "—"}</td>
           <td>${t.visits?.visit_mode === "online" ? "Online" : "In-Clinic"}</td>
-          <td><span class="dz-badge live">${DZ_TOKEN_STATUS_LABEL[t.status] || t.status}</span></td>
+          <td><span class="dz-badge live">${DZ_STATUS_LABEL[t.status] || t.status}</span></td>
           <td>${dzWaitingMinutes(t.created_at)} min</td>
           <td>${t.payment_status}</td>
-        </tr>`).join("")}</tbody></table>`;
+          <td>${canSend ? `<button class="ghost-refresh" style="padding:5px 10px;font-size:11.5px" onclick="dzSendToDoctor('${t.id}')">Send to Doctor</button>` : ""}</td>
+        </tr>`;
+      }).join("")}</tbody></table>`;
   } catch (e) {
     host.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">Failed to load queue: ${e.message}</div>`;
+  }
+}
+
+/** Real state transition — sets status to waiting_doctor so Doctor Workspace's
+ *  query (which now also safety-nets on vitals_done) picks the patient up immediately. */
+async function dzSendToDoctor(tokenId) {
+  try {
+    const { error } = await window.dzSupabase.from("tokens").update({ status: DZ_STATUS.WAITING_DOCTOR }).eq("id", tokenId);
+    if (error) throw error;
+    await dzLoadQueue();
+  } catch (e) {
+    alert("Could not send to doctor: " + e.message);
   }
 }
 </script>
