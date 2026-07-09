@@ -12,8 +12,9 @@
 <style>
   .vf{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:14px 0}
   .vf .fld label{font-size:11px;font-weight:600;color:var(--slate-700);display:block;margin-bottom:4px}
-  .vf .fld input{width:100%;padding:9px;border:1px solid var(--slate-200);border-radius:7px;font-size:14px;box-sizing:border-box}
+  .vf .fld input,.vf .fld select,.vf .fld textarea{width:100%;padding:9px;border:1px solid var(--slate-200);border-radius:7px;font-size:14px;box-sizing:border-box;font-family:inherit}
   .primary-btn{padding:11px 20px;background:var(--clinical-700);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:13.5px}
+  .match-card{border:1px solid var(--slate-200);border-radius:8px;padding:10px 14px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
 </style>
 </head>
 <body>
@@ -45,14 +46,22 @@ let dzOrgId=null, dzQueueRows=[];
     <div class="dz-panel" id="vitalsForm" style="display:none">
       <h2 id="vfPatientName"></h2>
       <div class="vf">
-        <div class="fld"><label>BP (e.g. 120/80)</label><input id="vBp"></div>
+        <div class="fld"><label>BP Systolic</label><input id="vSys" type="number"></div>
+        <div class="fld"><label>BP Diastolic</label><input id="vDia" type="number"></div>
         <div class="fld"><label>Pulse (/min)</label><input id="vPulse" type="number"></div>
         <div class="fld"><label>Temp (°F)</label><input id="vTemp" type="number" step="0.1"></div>
         <div class="fld"><label>SpO2 (%)</label><input id="vSpo2" type="number"></div>
         <div class="fld"><label>RBS/FBS (mg/dL)</label><input id="vSugar" type="number"></div>
+        <div class="fld"><label>Respiratory Rate (/min)</label><input id="vResp" type="number"></div>
         <div class="fld"><label>Weight (kg)</label><input id="vWeight" type="number" step="0.1"></div>
-        <div class="fld"><label>Height (cm) <span style="font-weight:400;color:var(--slate-500)">— BMI only, not saved</span></label><input id="vHeight" type="number"></div>
+        <div class="fld"><label>Height (cm)</label><input id="vHeight" type="number"></div>
+        <div class="fld"><label>Pain Score (0-10)</label><input id="vPain" type="number" min="0" max="10"></div>
+        <div class="fld" id="pregWrap" style="display:none"><label>Pregnancy Status</label>
+          <select id="vPreg"><option value="">Not specified</option><option>Not pregnant</option><option>Pregnant</option><option>Unknown</option></select>
+        </div>
+        <div class="fld" id="lmpWrap" style="display:none"><label>LMP (optional)</label><input id="vLmp" type="date"></div>
       </div>
+      <div class="fld"><label>Notes</label><textarea id="vNotes" rows="2"></textarea></div>
       <div id="bmiOut" style="font-size:12.5px;color:var(--slate-500);margin-bottom:10px"></div>
       <button class="primary-btn" onclick="dzSaveVitals()">Save Vitals</button>
       <div id="vitalsStatus" style="margin-top:10px;font-size:12.5px"></div>
@@ -79,7 +88,7 @@ async function dzLoadPending() {
   if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">${error.message}</div>`; return; }
   dzQueueRows = data || [];
   if (!dzQueueRows.length) { host.innerHTML = dzEmptyState("♥","No one waiting","Patients appear here once registered."); return; }
-  host.innerHTML = dzQueueRows.map((t,i) => `<div class="match-card" style="border:1px solid var(--slate-200);border-radius:8px;padding:10px 14px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+  host.innerHTML = dzQueueRows.map((t,i) => `<div class="match-card">
       <span><b>#${t.token_number}</b> ${t.patients?.full_name || ""} (${t.patients?.age||"?"}, ${t.patients?.gender||"-"})</span>
       <button class="primary-btn" style="padding:7px 14px" onclick="dzOpenVitals(${i})">Enter Vitals</button>
     </div>`).join("");
@@ -90,18 +99,33 @@ function dzOpenVitals(i) {
   dzSelectedToken = dzQueueRows[i];
   document.getElementById("vitalsForm").style.display = "block";
   document.getElementById("vfPatientName").textContent = `#${dzSelectedToken.token_number} — ${dzSelectedToken.patients?.full_name || ""}`;
+  const isFemale = /female/i.test(dzSelectedToken.patients?.gender || "");
+  document.getElementById("pregWrap").style.display = isFemale ? "block" : "none";
+  document.getElementById("lmpWrap").style.display = isFemale ? "block" : "none";
   document.getElementById("vitalsForm").scrollIntoView({ behavior: "smooth" });
 }
 
 async function dzSaveVitals() {
   if (!dzSelectedToken) return;
+  const sys = document.getElementById("vSys").value;
+  const dia = document.getElementById("vDia").value;
+  const weight = document.getElementById("vWeight").value;
+  const height = document.getElementById("vHeight").value;
+  const bmi = dzComputeBMI(parseFloat(weight), parseFloat(height));
   const v = {
-    bp: document.getElementById("vBp").value.trim() || null,
+    bp: (sys && dia) ? `${sys}/${dia}` : null,
     pulse: document.getElementById("vPulse").value || null,
     temperature: document.getElementById("vTemp").value || null,
     spo2: document.getElementById("vSpo2").value || null,
     rbs_fbs: document.getElementById("vSugar").value || null,
-    weight: document.getElementById("vWeight").value || null,
+    respiratory_rate: document.getElementById("vResp").value || null,
+    weight: weight || null,
+    height_cm: height || null,
+    bmi: bmi || null,
+    pain_score: document.getElementById("vPain").value || null,
+    pregnancy_status: document.getElementById("vPreg").value || null,
+    lmp_date: document.getElementById("vLmp").value || null,
+    notes: document.getElementById("vNotes").value || null,
   };
   const check = dzCheckVitalsAbnormal(v);
   const status = document.getElementById("vitalsStatus");
@@ -115,7 +139,7 @@ async function dzSaveVitals() {
     if (vErr) throw vErr;
     await window.dzSupabase.from("tokens").update({ status: "vitals_done" }).eq("id", dzSelectedToken.id);
     status.innerHTML = check.isAbnormal
-      ? `<span style="color:var(--signal-warning);font-weight:700">⚠ Abnormal: ${check.flags.join(", ")} — saved, doctor will be flagged.</span>`
+      ? `<span style="color:var(--signal-warning);font-weight:700">⚠ Abnormal: ${check.flags.join(", ")} — saved, doctor will see this flag.</span>`
       : `<span style="color:var(--signal-success);font-weight:700">✓ Vitals saved — normal range.</span>`;
     document.getElementById("vitalsForm").style.display = "none";
     await dzLoadPending();
