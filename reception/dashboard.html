@@ -78,19 +78,18 @@ async function dzLoadQueue() {
     const today = new Date(); today.setHours(0,0,0,0);
     const { data, error } = await window.dzSupabase
       .from("tokens")
-      .select("id, token_number, status, source, priority, payment_status, created_at, patients(full_name), visits(visit_mode, chief_complaint)")
+      .select("id, visit_id, token_number, status, source, priority, payment_status, created_at, patients(full_name), visits(visit_mode, chief_complaint)")
       .eq("organization_id", orgId)
       .gte("created_at", today.toISOString())
       .order("token_number", { ascending: true });
     if (error) throw error;
+    console.log("[Queue Debug] reception query result", data);
     if (!data || !data.length) { host.innerHTML = dzEmptyState("▤","No patients yet today","Register a patient to start today's queue."); return; }
     host.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead><tr style="text-align:left;color:var(--slate-500);font-size:11px;text-transform:uppercase">
         <th style="padding:8px 6px">Token</th><th>Patient</th><th>Visit</th><th>Status</th><th>Waiting</th><th>Payment</th><th>Action</th>
       </tr></thead>
-      <tbody>${data.map(t => {
-        const canSend = [DZ_STATUS.REGISTERED, DZ_STATUS.WAITING_VITALS, DZ_STATUS.VITALS_DONE].includes(t.status);
-        return `
+      <tbody>${data.map(t => `
         <tr style="border-top:1px solid var(--slate-100)">
           <td style="padding:8px 6px;font-family:var(--font-data)">#${t.token_number}</td>
           <td>${t.patients?.full_name || "—"}</td>
@@ -98,23 +97,48 @@ async function dzLoadQueue() {
           <td><span class="dz-badge live">${DZ_STATUS_LABEL[t.status] || t.status}</span></td>
           <td>${dzWaitingMinutes(t.created_at)} min</td>
           <td>${t.payment_status}</td>
-          <td>${canSend ? `<button class="ghost-refresh" style="padding:5px 10px;font-size:11.5px" onclick="dzSendToDoctor('${t.id}')">Send to Doctor</button>` : ""}</td>
-        </tr>`;
-      }).join("")}</tbody></table>`;
+          <td>${dzActionButtons(t)}</td>
+        </tr>`).join("")}</tbody></table>`;
   } catch (e) {
     host.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">Failed to load queue: ${e.message}</div>`;
   }
 }
 
-/** Real state transition — sets status to waiting_doctor so Doctor Workspace's
- *  query (which now also safety-nets on vitals_done) picks the patient up immediately. */
-async function dzSendToDoctor(tokenId) {
+/** One button per status, matching the canonical lifecycle in shared/visit-status.js. */
+function dzActionButtons(t) {
+  const btn = (label, fn) => `<button class="ghost-refresh" style="padding:5px 10px;font-size:11.5px;margin-right:4px" onclick="${fn}">${label}</button>`;
+  switch (t.status) {
+    case DZ_STATUS.REGISTERED:
+      return btn("Send to Vitals", `dzTransition('${t.id}','${t.visit_id}','${DZ_STATUS.WAITING_VITALS}')`) +
+             btn("Send to Doctor", `dzTransition('${t.id}','${t.visit_id}','${DZ_STATUS.WAITING_DOCTOR}')`);
+    case DZ_STATUS.WAITING_VITALS:
+    case DZ_STATUS.VITALS_DONE:
+      return btn("Send to Doctor", `dzTransition('${t.id}','${t.visit_id}','${DZ_STATUS.WAITING_DOCTOR}')`);
+    case DZ_STATUS.WAITING_DOCTOR:
+      return btn("Mark With Doctor", `dzTransition('${t.id}','${t.visit_id}','${DZ_STATUS.WITH_DOCTOR}')`);
+    case DZ_STATUS.WITH_DOCTOR:
+    case DZ_STATUS.DOCTOR_DONE:
+      return btn("Complete", `dzTransition('${t.id}','${t.visit_id}','${DZ_STATUS.COMPLETED}')`);
+    default:
+      return "";
+  }
+}
+
+/** Single real state-transition function - updates both tokens.status (the
+ *  value every queue query actually filters on) and visits.status (kept in
+ *  sync for consistency, per "prefer visit status as source of truth" -
+ *  token still references visit, but all existing queries read tokens.status
+ *  so that remains the operative value; changing this app-wide would be a
+ *  much larger rebuild than this fix scope allows). */
+async function dzTransition(tokenId, visitId, newStatus) {
   try {
-    const { error } = await window.dzSupabase.from("tokens").update({ status: DZ_STATUS.WAITING_DOCTOR }).eq("id", tokenId);
-    if (error) throw error;
+    const { error: tErr } = await window.dzSupabase.from("tokens").update({ status: newStatus }).eq("id", tokenId);
+    if (tErr) throw tErr;
+    if (visitId) await window.dzSupabase.from("visits").update({ status: newStatus }).eq("id", visitId);
+    console.log("[Queue Debug] status transitioned", { tokenId, visitId, newStatus });
     await dzLoadQueue();
   } catch (e) {
-    alert("Could not send to doctor: " + e.message);
+    alert("Could not update status: " + e.message);
   }
 }
 </script>
