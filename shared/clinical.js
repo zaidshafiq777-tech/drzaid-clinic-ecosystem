@@ -7,19 +7,34 @@
 /** Generates the next EMR number for an org: DZ-EMR-000001 style.
  *  Reads the real current max from the database — never guesses. */
 async function dzNextEmrNumber(orgId) {
+  // IMPORTANT: only consider EMRs already in our own "DZ-EMR-NNNNNN" format.
+  // Older/legacy/test data (e.g. "EMR-<timestamp>", "EMR-E2E-...") must be
+  // ignored, or the "highest" match picks garbage digits from an unrelated
+  // format and produces a wrong/colliding number. This was a real bug found
+  // via production data - fixed by filtering to our own prefix explicitly.
   const { data, error } = await window.dzSupabase
     .from("patients")
     .select("emr_number")
     .eq("organization_id", orgId)
-    .not("emr_number", "is", null)
+    .ilike("emr_number", "DZ-EMR-%")
     .order("emr_number", { ascending: false })
     .limit(1);
   let next = 1;
   if (!error && data && data.length && data[0].emr_number) {
-    const m = String(data[0].emr_number).match(/(\d+)$/);
+    const m = String(data[0].emr_number).match(/^DZ-EMR-(\d+)$/);
     if (m) next = parseInt(m[1], 10) + 1;
   }
-  return "DZ-EMR-" + String(next).padStart(6, "0");
+  let candidate = "DZ-EMR-" + String(next).padStart(6, "0");
+  // Extra safety net: if this exact number somehow already exists (race condition
+  // or leftover data), keep incrementing until we find a free one - never let the
+  // save fail on a duplicate-key error again.
+  for (let guard = 0; guard < 20; guard++) {
+    const { data: clash } = await window.dzSupabase.from("patients").select("id").eq("emr_number", candidate).maybeSingle();
+    if (!clash) return candidate;
+    next++;
+    candidate = "DZ-EMR-" + String(next).padStart(6, "0");
+  }
+  return candidate;
 }
 
 /** Real abnormal-vitals detection. Thresholds are standard adult clinical
