@@ -52,10 +52,14 @@ const DZ_RECEPTION_QUEUE_STATUSES = [
 ];
 
 /** Statuses that mean "doctor should see this patient." Includes VITALS_DONE
- *  as a safety net (so a patient never gets stuck invisible even if reception
- *  forgets to click "Send to Doctor"), plus the two explicit doctor-owned states. */
+ *  and REGISTERED as safety nets (so a patient never gets stuck invisible
+ *  even from an older data path or if reception forgets an explicit
+ *  transition), plus the two explicit doctor-owned states. Registration now
+ *  defaults new patients straight to WAITING_DOCTOR, so REGISTERED showing
+ *  up here should be rare - when it does, the UI marks it with a
+ *  "Not sent to doctor yet" notice rather than treating it as fully ready. */
 const DZ_DOCTOR_QUEUE_STATUSES = [
-  DZ_STATUS.VITALS_DONE, DZ_STATUS.WAITING_DOCTOR, DZ_STATUS.WITH_DOCTOR,
+  DZ_STATUS.REGISTERED, DZ_STATUS.VITALS_DONE, DZ_STATUS.WAITING_DOCTOR, DZ_STATUS.WITH_DOCTOR,
 ];
 
 /** Statuses meaning vitals have not been recorded yet — shown in the Vitals worklist. */
