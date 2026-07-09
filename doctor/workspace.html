@@ -373,11 +373,22 @@ async function dzAnalyzeReportText() {
 /** File upload — honest: no OCR/vision backend is configured, so we say so clearly
  *  rather than pretending to read the file. See N8N_WORKFLOWS_REQUIRED.md. */
 function dzHandleReportFile(evt) {
-  const f = evt.target.files[0];
-  const status = document.getElementById("reportFileStatus");
-  if (!f) return;
-  status.innerHTML = `<span style="color:var(--signal-warning)">Upload received (${dzEsc(f.name)}). OCR/vision backend required — not yet configured. Please use "Paste Report Text" above instead for now. See N8N_WORKFLOWS_REQUIRED.md.</span>`;
-  evt.target.value = "";
+  try {
+    const f = evt.target.files[0];
+    const status = document.getElementById("reportFileStatus");
+    if (!f) { console.warn("[ReportUpload] no file in event"); return; }
+    const msg = `File "${f.name}" received, but this clinic isn't yet connected to a PDF/image reading service (OCR). This file was NOT read or analyzed. Please copy the report's text and use "Paste Report Text" above instead — that works right now.`;
+    if (status) {
+      status.style.cssText = "font-size:12.5px;font-weight:700;color:var(--signal-warning);background:#FFF7E6;border:1px solid var(--signal-warning);border-radius:6px;padding:8px 10px;margin-top:6px;display:block";
+      status.textContent = msg;
+      status.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    alert(msg);
+    evt.target.value = "";
+  } catch (e) {
+    console.error("[ReportUpload] handler error", e);
+    alert("Something went wrong reading that file: " + e.message);
+  }
 }
 
 /** ANALYZE — the actual AI call. Separate from Stop Listening, as required. */
