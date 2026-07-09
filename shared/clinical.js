@@ -30,27 +30,32 @@ function dzCheckVitalsAbnormal(v) {
     const m = String(v.bp).match(/(\d+)\s*\/\s*(\d+)/);
     if (m) {
       const sys = parseInt(m[1], 10), dia = parseInt(m[2], 10);
-      if (sys >= 160 || dia >= 100) flags.push("High BP (Hypertensive)");
-      else if (sys < 90 || dia < 60) flags.push("Low BP (Hypotensive)");
+      if (sys > 140 || dia > 90) flags.push("High BP (>140/90)");
+      else if (sys < 90 || dia < 60) flags.push("Low BP (<90/60)");
     }
   }
   if (v.pulse) {
     const p = Number(v.pulse);
-    if (p > 120) flags.push("Tachycardia (high pulse)");
-    else if (p < 50) flags.push("Bradycardia (low pulse)");
+    if (p > 100) flags.push("High pulse (>100)");
+    else if (p < 60) flags.push("Low pulse (<60)");
   }
   if (v.temperature) {
     const t = Number(v.temperature);
-    if (t >= 100.4) flags.push("Fever");
+    if (t > 100.4) flags.push("Fever (>100.4°F)");
   }
   if (v.spo2) {
     const s = Number(v.spo2);
-    if (s < 94) flags.push("Low SpO2");
+    if (s < 94) flags.push("Low SpO2 (<94%)");
   }
   if (v.rbs_fbs) {
     const g = Number(v.rbs_fbs);
     if (g >= 200) flags.push("High blood sugar");
     else if (g > 0 && g < 70) flags.push("Low blood sugar");
+  }
+  if (v.bmi) {
+    const b = Number(v.bmi);
+    if (b >= 30) flags.push("Obese (BMI ≥30)");
+    else if (b >= 25) flags.push("Overweight (BMI 25-29.9)");
   }
   return { isAbnormal: flags.length > 0, flags };
 }
