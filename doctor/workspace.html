@@ -59,6 +59,7 @@
 <script src="../shared/prescription-safety.js"></script>
 <script src="../shared/prescription-renderer.js"></script>
 <script src="../shared/report-vision-uploader.js"></script>
+<script src="../shared/report-analyzer.js"></script>
 <script>
 let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCurrentVitals=null;
 (async () => {
@@ -84,24 +85,45 @@ let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCur
 async function dzLoadQueue() {
   const host = document.getElementById("dQueue");
   const { data, error } = await window.dzSupabase.from("tokens")
-    .select("id, token_number, visit_id, patient_id, status, patients(id, full_name, age, gender, phone, emr_number), visits(chief_complaint)")
+    .select("id, token_number, visit_id, patient_id, status, created_at, patients(id, full_name, age, gender, phone, emr_number), visits(chief_complaint)")
     .eq("organization_id", dzOrgId).in("status", DZ_DOCTOR_QUEUE_STATUSES)
     .order("token_number");
   if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  console.log("[Queue Debug] doctor query result", data);
   dzQueue = data || [];
   host.innerHTML = dzQueue.length ? dzQueue.map((t,i) =>
     `<div class="qItem ${dzSelected?.id===t.id?'active':''}" onclick="dzOpenPatient(${i})">
-       <div class="tk">#${t.token_number} &middot; ${t.status==='with_doctor'?'In progress':'Waiting'}</div>
+       <div class="tk">#${t.token_number} &middot; ${t.status==='with_doctor'?'In progress':DZ_STATUS_LABEL[t.status]||t.status}</div>
        <div style="font-weight:600;font-size:13px">${t.patients?.full_name||''}</div>
        <div style="font-size:11.5px;color:var(--slate-500)">${t.visits?.chief_complaint||''}</div>
+       ${t.status===DZ_STATUS.REGISTERED ? `<div style="font-size:10.5px;color:var(--signal-warning);margin-top:2px">⚠ Not sent to doctor yet</div>` : ""}
      </div>`).join("") : `<div style="font-size:12px;color:var(--slate-500)">Queue is empty.</div>`;
+  dzRenderQueueDebug(dzQueue);
+}
+
+/** Owner/dev-only debug panel - shows exactly which patients loaded, why,
+ *  and full IDs/timestamps for tracing the queue lifecycle. */
+function dzRenderQueueDebug(rows) {
+  const isOwnerTier = ["org_owner","branch_admin","super_admin"].includes(window.DZ_SESSION?.profile?.role);
+  let panel = document.getElementById("queueDebugPanel");
+  if (!isOwnerTier) { if (panel) panel.remove(); return; }
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "queueDebugPanel";
+    panel.style.cssText = "margin-top:10px;background:#0f172a;color:#94a3b8;border-radius:8px;padding:8px;font-family:var(--font-data);font-size:10px;max-height:200px;overflow:auto";
+    document.getElementById("dQueue").parentElement.appendChild(panel);
+  }
+  panel.innerHTML = `<b style="color:#e2e8f0">Queue Debug (${rows.length} rows, statuses: ${DZ_DOCTOR_QUEUE_STATUSES.join(",")})</b><br>` +
+    rows.map(t => `patient=${t.patient_id?.slice(0,8)} visit=${t.visit_id?.slice(0,8)} token=${t.id?.slice(0,8)} #${t.token_number} status=${t.status} created=${new Date(t.created_at).toLocaleTimeString()}`).join("<br>");
 }
 
 async function dzOpenPatient(i) {
   dzSelected = dzQueue[i];
   dzMeds = [{name:"",dosage:"",frequency:"",duration:""}];
   dzTranscriptFinal = ""; dzListener = null;
-  await window.dzSupabase.from("tokens").update({ status: "with_doctor" }).eq("id", dzSelected.id);
+  await window.dzSupabase.from("tokens").update({ status: DZ_STATUS.WITH_DOCTOR }).eq("id", dzSelected.id);
+  if (dzSelected.visit_id) await window.dzSupabase.from("visits").update({ status: DZ_STATUS.WITH_DOCTOR }).eq("id", dzSelected.visit_id);
+  console.log("[Queue Debug] doctor opened patient, status -> with_doctor", { tokenId: dzSelected.id, visitId: dzSelected.visit_id });
   await dzLoadQueue();
 
   const [{data:vitalsRows}, {data:history}, {data:allergies}, {data:chronic}, {data:activeMeds}] = await Promise.all([
@@ -404,7 +426,7 @@ async function dzUploadAndAnalyzeReport() {
   await new Promise(r => setTimeout(r, 150));
   status.textContent = "Extracting with Gemini Vision…";
 
-  const r = await dzUploadReportForVision(f, reportType, patientContext);
+  const rawResult = await dzUploadReportForVision(f, reportType, patientContext);
   const ms = Math.round(performance.now() - t0);
 
   if (isOwnerTier) {
@@ -415,9 +437,16 @@ async function dzUploadAndAnalyzeReport() {
       `mimeType: ${f.type}\n` +
       `payloadSize: ~${Math.round(f.size/1024)} KB\n` +
       `elapsed: ${ms}ms\n` +
-      `response.ok: ${r.ok}\n` +
-      (r.ok ? `confidence: ${r.confidence}\nsource: ${r.source}` : `error: ${r.error}`);
+      `response.ok: ${rawResult.ok}\n` +
+      (rawResult.ok ? `confidence: ${rawResult.confidence}\nsource: ${rawResult.source}` : `error: ${rawResult.error}`);
   }
+
+  // dzNormalizeReportResult is the fix for the "raw JSON dump" bug: n8n's
+  // response shape (cleanSummary/keyFindings/prescriptionText) had drifted
+  // from what this page was reading (summary/abnormalFindings) - this
+  // normalizer is the single place that maps the real response correctly
+  // and defensively strips anything that still looks like raw JSON.
+  const r = dzNormalizeReportResult(rawResult);
 
   if (!r.ok) {
     status.innerHTML = `<span style="color:var(--signal-critical);font-weight:700">Failed: ${dzEsc(r.error)}</span>`;
@@ -427,21 +456,20 @@ async function dzUploadAndAnalyzeReport() {
   status.textContent = "Summarizing…";
   await new Promise(res => setTimeout(res, 100));
 
-  const summaryLine = `${r.reportType || reportType}: ${r.summary || "No summary returned."}${r.impression ? " Impression: " + r.impression : ""}`;
-  const reportEntry = { text: summaryLine, included: true, raw: r };
-  dzReportSummaries.push(summaryLine); // same array "Paste Report Text" feeds - single source for prescription context
+  // Prescription context gets ONLY the short, clean prescriptionText - never raw text, never JSON.
+  dzReportSummaries.push(r.prescriptionText || r.cleanSummary);
   const entryIndex = dzReportSummaries.length - 1;
 
   status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Added to prescription context.</span>`;
   resultHost.innerHTML = `
     <div style="background:var(--slate-50);border-radius:8px;padding:10px;margin-top:8px;font-size:12px">
-      <div><b>Summary:</b> ${dzEsc(r.summary || "—")}</div>
-      ${r.impression ? `<div><b>Impression:</b> ${dzEsc(r.impression)}</div>` : ""}
-      ${(r.abnormalFindings||[]).length ? `<div><b>Abnormal findings:</b> ${r.abnormalFindings.map(dzEsc).join(", ")}</div>` : ""}
-      ${(r.redFlags||[]).length ? `<div style="color:var(--signal-critical)"><b>Red flags:</b> ${r.redFlags.map(dzEsc).join(", ")}</div>` : ""}
-      <div style="font-size:11px;color:var(--slate-500);margin-top:4px">Confidence: ${dzEsc(r.confidence||'medium')} &middot; Source: Gemini 2.5 Flash Vision</div>
-      <details style="margin-top:6px"><summary style="cursor:pointer;font-size:11px;color:var(--slate-500)">Extracted text (raw)</summary>
-        <div style="font-size:11px;white-space:pre-wrap;margin-top:4px">${dzEsc(r.extractedText || "(none extracted)")}</div>
+      <div><b>Clean Summary:</b> ${dzEsc(r.cleanSummary || "—")}</div>
+      ${r.keyFindings.length ? `<div style="margin-top:4px"><b>Key Findings:</b><ul style="margin:4px 0 0 18px;padding:0">${r.keyFindings.map(f2=>`<li>${dzEsc(f2)}</li>`).join("")}</ul></div>` : ""}
+      ${r.redFlags.length ? `<div style="color:var(--signal-critical);margin-top:4px"><b>Red Flags:</b> ${r.redFlags.map(dzEsc).join(", ")}</div>` : ""}
+      ${r.impression ? `<div style="margin-top:4px"><b>Impression:</b> ${dzEsc(r.impression)}</div>` : ""}
+      <div style="font-size:11px;color:var(--slate-500);margin-top:6px">Confidence: ${dzEsc(r.confidence)} &middot; Source: ${dzEsc(r.source)}</div>
+      <details style="margin-top:6px"><summary style="cursor:pointer;font-size:11px;color:var(--slate-500)">Raw Extracted Text</summary>
+        <div style="font-size:11px;white-space:pre-wrap;margin-top:4px">${dzEsc(r.rawExtractedText || "(none extracted)")}</div>
       </details>
       <label style="display:block;margin-top:6px;font-size:11.5px"><input type="checkbox" checked onchange="dzToggleReportInclusion(${entryIndex}, this.checked)"> Add to prescription context</label>
       <button class="ai-btn" style="margin-top:4px" onclick="dzRemoveReportSummary(${entryIndex})">Remove from context</button>
