@@ -24,6 +24,7 @@
 <script src="../shared/auth.js"></script>
 <script src="../shared/shell.js"></script>
 <script src="../shared/clinical.js"></script>
+<script src="../shared/visit-status.js"></script>
 <script src="../shared/ai-manager.js"></script>
 <script src="../shared/automation-manager.js"></script>
 <script src="../shared/command-bar.js"></script>
@@ -63,7 +64,7 @@ let dzOrgId=null, dzQueueRows=[];
       </div>
       <div class="fld"><label>Notes</label><textarea id="vNotes" rows="2"></textarea></div>
       <div id="bmiOut" style="font-size:12.5px;color:var(--slate-500);margin-bottom:10px"></div>
-      <button class="primary-btn" onclick="dzSaveVitals()">Save Vitals</button>
+      <button class="primary-btn" onclick="dzSaveVitals()">Mark Vitals Done &amp; Send to Doctor</button>
       <div id="vitalsStatus" style="margin-top:10px;font-size:12.5px"></div>
     </div>`;
 
@@ -137,7 +138,11 @@ async function dzSaveVitals() {
       recorded_by: window.DZ_SESSION.user.id,
     });
     if (vErr) throw vErr;
-    await window.dzSupabase.from("tokens").update({ status: "vitals_done" }).eq("id", dzSelectedToken.id);
+    // Send straight to the doctor's queue (not just "vitals_done") so the patient
+    // is immediately visible in Doctor Workspace - this is the fix for the bug
+    // where patients got stuck invisible after vitals with no one ever setting
+    // waiting_doctor.
+    await window.dzSupabase.from("tokens").update({ status: DZ_STATUS.WAITING_DOCTOR }).eq("id", dzSelectedToken.id);
     status.innerHTML = check.isAbnormal
       ? `<span style="color:var(--signal-warning);font-weight:700">⚠ Abnormal: ${check.flags.join(", ")} — saved, doctor will see this flag.</span>`
       : `<span style="color:var(--signal-success);font-weight:700">✓ Vitals saved — normal range.</span>`;
