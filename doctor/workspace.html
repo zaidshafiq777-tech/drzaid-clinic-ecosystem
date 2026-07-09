@@ -55,6 +55,7 @@
 <script src="../shared/ai-copilot.js"></script>
 <script src="../shared/voice-listener.js"></script>
 <script src="../shared/prescription-agent.js"></script>
+<script src="../shared/visit-status.js"></script>
 <script src="../shared/prescription-safety.js"></script>
 <script src="../shared/prescription-renderer.js"></script>
 <script src="../shared/report-vision-uploader.js"></script>
@@ -84,7 +85,7 @@ async function dzLoadQueue() {
   const host = document.getElementById("dQueue");
   const { data, error } = await window.dzSupabase.from("tokens")
     .select("id, token_number, visit_id, patient_id, status, patients(id, full_name, age, gender, phone, emr_number), visits(chief_complaint)")
-    .eq("organization_id", dzOrgId).in("status", ["waiting_doctor","with_doctor"])
+    .eq("organization_id", dzOrgId).in("status", DZ_DOCTOR_QUEUE_STATUSES)
     .order("token_number");
   if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
   dzQueue = data || [];
@@ -182,6 +183,7 @@ async function dzOpenPatient(i) {
         <button class="ai-btn" onclick="dzUploadAndAnalyzeReport()">Upload &amp; Analyze Report</button>
         <div id="reportFileStatus" style="font-size:11.5px;color:var(--slate-500);margin-top:4px"></div>
         <div id="reportVisionResult"></div>
+        <div id="reportVisionDebug" style="display:none;margin-top:8px;background:#0f172a;color:#94a3b8;border-radius:8px;padding:10px;font-family:var(--font-data);font-size:10.5px;white-space:pre-wrap"></div>
       </div>
       <div id="analyzeStatus" style="font-size:12px;margin-top:6px"></div>
     </div>
@@ -385,6 +387,8 @@ async function dzUploadAndAnalyzeReport() {
   const f = fileInput.files[0];
   const status = document.getElementById("reportFileStatus");
   const resultHost = document.getElementById("reportVisionResult");
+  const debugHost = document.getElementById("reportVisionDebug");
+  const isOwnerTier = ["org_owner","branch_admin","super_admin"].includes(window.DZ_SESSION?.profile?.role);
   if (!f) { status.innerHTML = `<span style="color:var(--signal-critical)">Choose a file first.</span>`; return; }
 
   const reportType = document.getElementById("reportTypeSelect").value;
@@ -396,10 +400,24 @@ async function dzUploadAndAnalyzeReport() {
   status.style.cssText = "font-size:11.5px;color:var(--slate-500);margin-top:4px";
   status.textContent = "Uploading…";
   resultHost.innerHTML = "";
+  const t0 = performance.now();
   await new Promise(r => setTimeout(r, 150));
   status.textContent = "Extracting with Gemini Vision…";
 
   const r = await dzUploadReportForVision(f, reportType, patientContext);
+  const ms = Math.round(performance.now() - t0);
+
+  if (isOwnerTier) {
+    debugHost.style.display = "block";
+    debugHost.textContent =
+      `webhook: ${DZ_VISION_WEBHOOK}\n` +
+      `fileName: ${f.name}\n` +
+      `mimeType: ${f.type}\n` +
+      `payloadSize: ~${Math.round(f.size/1024)} KB\n` +
+      `elapsed: ${ms}ms\n` +
+      `response.ok: ${r.ok}\n` +
+      (r.ok ? `confidence: ${r.confidence}\nsource: ${r.source}` : `error: ${r.error}`);
+  }
 
   if (!r.ok) {
     status.innerHTML = `<span style="color:var(--signal-critical);font-weight:700">Failed: ${dzEsc(r.error)}</span>`;
