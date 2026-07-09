@@ -27,6 +27,7 @@ async function dzGatherConsultationContext(patient, visit, tokenRow) {
 
 const DZ_RX_SCHEMA_EXAMPLE = `{
   "chief_complaint": "", "history": "", "examination": "", "vitals_summary": "", "reports_summary": "",
+  "important_report_findings": [], "report_based_cautions": [],
   "provisional_diagnosis": "", "differential_diagnosis": [], "red_flags": [],
   "medicines": [{"name":"","strength":"","dose":"","frequency":"","duration":"","instructions":"","quantity":""}],
   "investigations": [], "advice_english": "", "advice_urdu": "", "follow_up": "",
@@ -42,7 +43,7 @@ async function dzGeneratePrescriptionFromConsultation(transcript, context) {
   const ctxLines = [
     `Patient: ${context.demographics.name}, ${context.demographics.age || "age not on file"} ${context.demographics.gender || ""}, EMR ${context.demographics.emr || "—"}.`,
     context.vitals ? `Vitals: BP ${context.vitals.bp||"-"}, Pulse ${context.vitals.pulse||"-"}, Temp ${context.vitals.temperature||"-"}, SpO2 ${context.vitals.spo2||"-"}, RBS/FBS ${context.vitals.rbs_fbs||"-"}, Weight ${context.vitals.weight||"-"}kg, Height ${context.vitals.height_cm||"-"}cm, BMI ${context.vitals.bmi||"-"}, Pain score ${context.vitals.pain_score??"-"}${context.vitals.pregnancy_status?", Pregnancy: "+context.vitals.pregnancy_status:""}${context.vitals.is_abnormal?" (flagged abnormal)":""}.` : "Vitals: not recorded for this visit.",
-    (context.reportSummaries && context.reportSummaries.length) ? `Uploaded/pasted report summaries:\n${context.reportSummaries.map((s,i)=>(i+1)+". "+s).join("\n")}` : "Reports: none attached for this visit.",
+    (() => { const real = (context.reportSummaries||[]).filter(Boolean); return real.length ? `Uploaded/pasted report summaries:\n${real.map((s,i)=>(i+1)+". "+s).join("\n")}` : "Reports: none attached for this visit."; })(),
     context.allergies.length ? `Known allergies: ${context.allergies.map(a=>a.allergy+(a.severity?` (${a.severity})`:"")).join(", ")}.` : "Known allergies: none on file.",
     context.chronicConditions.length ? `Chronic conditions: ${context.chronicConditions.map(c=>c.condition).join(", ")}.` : "Chronic conditions: none on file.",
     context.activeMedications.length ? `Current medicines: ${context.activeMedications.map(m=>m.medicine_name).join(", ")}.` : "Current medicines: none on file.",
@@ -67,6 +68,8 @@ RULES:
 - Medicine strengths/doses should reflect what was actually said; if unclear, note "confirm with doctor" in instructions rather than guessing a number.
 - advice_urdu must be written in Roman Urdu or Urdu script, simple and practical.
 - reports_summary should synthesize any "Uploaded/pasted report summaries" listed above into 5-8 lines (4-6 for imaging); if none were provided, write "No reports attached for this visit."
+- important_report_findings should list the specific abnormal values/impressions pulled from the report summaries above (empty array if none attached).
+- report_based_cautions should list any doctor cautions implied by report findings (e.g. "avoid nephrotoxic drugs given raised creatinine") - empty array if none.
 - If a report finding seems to contradict the symptoms described, note this under safety_notes as: "Report findings should be clinically correlated."
 - Set one_page_mode to true unless the combination of history + reports_summary is clearly long enough to need more than one printed page — if so, set it to false.
 - Return ONLY a raw JSON object, no markdown fences, no preamble, no explanation text before or after. Exact shape:
