@@ -136,8 +136,7 @@ async function dzOpenForm(phone, existing) {
     document.getElementById("emrPreview").textContent = `Using existing patient — EMR ${existing.emr_number || "—"}`;
   } else {
     dzExistingPatient = null;
-    const next = await dzNextEmrNumber(dzOrgId);
-    document.getElementById("emrPreview").textContent = `New patient — EMR will be assigned: ${next}`;
+    document.getElementById("emrPreview").textContent = `New patient — EMR number will be auto-assigned by the system when saved (never duplicated).`;
   }
   document.getElementById("formStep").scrollIntoView({ behavior: "smooth" });
 }
@@ -152,18 +151,32 @@ async function dzSaveRegistration() {
   btn.disabled = true; btn.textContent = "Saving…";
   try {
     let patientId = dzExistingPatient?.id;
+    let assignedEmr = dzExistingPatient?.emr_number || null;
     if (!patientId) {
-      const emr = await dzNextEmrNumber(dzOrgId);
-      const { data: newPatient, error: pErr } = await window.dzSupabase.from("patients").insert({
+      // EMR is intentionally NOT set here. Supabase's trg_set_patient_emr trigger
+      // (backed by the patient_emr_seq sequence) assigns it atomically on insert -
+      // this is the single source of truth now, never generated in the frontend.
+      const insertPatient = async () => window.dzSupabase.from("patients").insert({
         organization_id: dzOrgId,
         full_name: name,
         age: document.getElementById("fAge").value || null,
         gender: document.getElementById("fGender").value || null,
         phone, address: document.getElementById("fAddress").value || null,
-        emr_number: emr,
-      }).select("id").single();
-      if (pErr) throw pErr;
+      }).select("id, emr_number").single();
+
+      let { data: newPatient, error: pErr } = await insertPatient();
+      if (pErr && /emr_number/i.test(pErr.message || "") && /duplicate|unique/i.test(pErr.message || "")) {
+        // Extremely unlikely with a DB sequence, but retry once as required.
+        ({ data: newPatient, error: pErr } = await insertPatient());
+      }
+      if (pErr) {
+        if (/emr_number/i.test(pErr.message || "")) {
+          throw new Error("EMR generation failed. Apply database migration (see DATABASE_CHANGES_REQUIRED.md).");
+        }
+        throw pErr;
+      }
       patientId = newPatient.id;
+      assignedEmr = newPatient.emr_number;
     }
     const { data: visit, error: vErr } = await window.dzSupabase.from("visits").insert({
       organization_id: dzOrgId, patient_id: patientId,
@@ -183,7 +196,7 @@ async function dzSaveRegistration() {
     }).select("token_number").single();
     if (tErr) throw tErr;
 
-    status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Token #${token.token_number} created for ${name}.</span>`;
+    status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Token #${token.token_number} created for ${name} (EMR: ${assignedEmr || '—'}).</span>`;
     setTimeout(() => (window.location.href = "dashboard.html"), 1200);
   } catch (e) {
     status.innerHTML = `<span style="color:var(--signal-critical)">Save failed: ${e.message}</span>`;
