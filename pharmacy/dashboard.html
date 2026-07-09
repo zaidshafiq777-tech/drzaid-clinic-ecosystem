@@ -38,10 +38,150 @@
     <div class="dz-panel">
       <h2>Dispensing Queue <span class="dz-badge live">Live</span></h2>
       <div id="pharmQueue"></div>
+    </div>
+    <div class="dz-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">Medicine Inventory</h2>
+        <button class="ai-btn" style="background:var(--clinical-700);color:#fff" onclick="dzToggleAddMedicine()">+ Add New Medicine</button>
+      </div>
+      <div id="addMedicineForm" style="display:none;background:var(--slate-50);border-radius:8px;padding:12px;margin-top:10px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">
+          <input id="mName" placeholder="Medicine name *">
+          <input id="mGeneric" placeholder="Generic name">
+          <input id="mBrand" placeholder="Brand name">
+          <input id="mCategory" placeholder="Category">
+          <select id="mForm"><option value="">Form</option><option>Tab</option><option>Cap</option><option>Syp</option><option>Inj</option><option>Cream</option><option>Drops</option><option>Inhaler</option></select>
+          <input id="mStrength" placeholder="Strength e.g. 500mg">
+          <input id="mUnit" placeholder="Unit e.g. tablet" value="tablet">
+          <input id="mBatch" placeholder="Batch number">
+          <input id="mExpiry" type="date" placeholder="Expiry date">
+          <input id="mPurchase" type="number" placeholder="Purchase price">
+          <input id="mSale" type="number" placeholder="Sale price">
+          <input id="mQty" type="number" placeholder="Stock quantity">
+          <input id="mReorder" type="number" placeholder="Min stock alert" value="10">
+          <input id="mSupplier" placeholder="Supplier">
+          <input id="mRack" placeholder="Rack/location">
+        </div>
+        <textarea id="mNotes" placeholder="Notes" rows="2" style="width:100%;margin-top:8px;padding:8px;border:1px solid var(--slate-200);border-radius:6px;box-sizing:border-box"></textarea>
+        <button class="primary-btn" style="margin-top:8px" onclick="dzSaveNewMedicine()">Save Medicine</button>
+        <div id="addMedicineStatus" style="font-size:12px;margin-top:6px"></div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <input id="medSearchBox" placeholder="Search medicine name…" style="flex:1;padding:8px;border:1px solid var(--slate-200);border-radius:7px" oninput="dzSearchMedicines()">
+        <button class="ai-btn" onclick="dzLoadLowStock()">Low Stock</button>
+        <button class="ai-btn" onclick="dzLoadExpiring()">Expiring Soon</button>
+      </div>
+      <div id="medicineListHost" style="margin-top:10px"></div>
     </div>`;
   await dzLoadPharmMetrics();
   await dzLoadPharmQueue();
 })();
+
+function dzToggleAddMedicine() {
+  const el = document.getElementById("addMedicineForm");
+  el.style.display = el.style.display === "none" ? "block" : "none";
+}
+
+async function dzSaveNewMedicine() {
+  const status = document.getElementById("addMedicineStatus");
+  const name = document.getElementById("mName").value.trim();
+  if (!name) { status.innerHTML = `<span style="color:var(--signal-critical)">Medicine name is required.</span>`; return; }
+  status.textContent = "Checking for duplicates…";
+  try {
+    const orgId = window.DZ_SESSION.profile.organization_id;
+    // AI Pharmacy Agent: real duplicate check against existing real inventory.
+    const { data: existing } = await window.dzSupabase.from("medicines").select("id, name").eq("organization_id", orgId).ilike("name", name);
+    if (existing && existing.length) {
+      if (!confirm(`A medicine named "${existing[0].name}" already exists. Add another batch for it instead of creating a duplicate entry?\\n\\nOK = use existing medicine (add batch)\\nCancel = create as a new separate entry anyway`)) {
+        // proceed to create new anyway (fallthrough)
+      } else {
+        await dzAddBatchToMedicine(existing[0].id, status);
+        return;
+      }
+    }
+    status.textContent = "Saving…";
+    const { data: med, error: mErr } = await window.dzSupabase.from("medicines").insert({
+      organization_id: orgId, name,
+      generic_name: document.getElementById("mGeneric").value || null,
+      brand_name: document.getElementById("mBrand").value || null,
+      category: document.getElementById("mCategory").value || null,
+      form: document.getElementById("mForm").value || null,
+      strength: document.getElementById("mStrength").value || null,
+      unit: document.getElementById("mUnit").value || "tablet",
+      supplier: document.getElementById("mSupplier").value || null,
+      rack_location: document.getElementById("mRack").value || null,
+      notes: document.getElementById("mNotes").value || null,
+      reorder_level: document.getElementById("mReorder").value || 10,
+    }).select("id").single();
+    if (mErr) throw mErr;
+    await dzAddBatchToMedicine(med.id, status);
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--signal-critical)">Save failed: ${e.message}</span>`;
+  }
+}
+
+async function dzAddBatchToMedicine(medicineId, status) {
+  const orgId = window.DZ_SESSION.profile.organization_id;
+  const qty = parseInt(document.getElementById("mQty").value, 10) || 0;
+  if (qty > 0) {
+    const { data: batch, error: bErr } = await window.dzSupabase.from("medicine_batches").insert({
+      organization_id: orgId, medicine_id: medicineId,
+      batch_no: document.getElementById("mBatch").value || null,
+      expiry_date: document.getElementById("mExpiry").value || null,
+      qty, purchase_price: document.getElementById("mPurchase").value || 0,
+      sale_price: document.getElementById("mSale").value || 0,
+    }).select("id").single();
+    if (bErr) throw bErr;
+    await window.dzSupabase.from("stock_ledger").insert({
+      organization_id: orgId, medicine_id: medicineId, batch_id: batch.id,
+      change_qty: qty, reason: "initial_stock", created_by: window.DZ_SESSION.user.id,
+    });
+  }
+  status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Medicine saved.</span>`;
+  document.getElementById("addMedicineForm").style.display = "none";
+  ["mName","mGeneric","mBrand","mCategory","mStrength","mBatch","mExpiry","mPurchase","mSale","mQty","mSupplier","mRack","mNotes"].forEach(id => document.getElementById(id).value = "");
+  await dzLoadPharmMetrics();
+  await dzSearchMedicines();
+}
+
+let dzMedSearchTimer = null;
+function dzSearchMedicines() {
+  clearTimeout(dzMedSearchTimer);
+  dzMedSearchTimer = setTimeout(async () => {
+    const q = document.getElementById("medSearchBox").value.trim();
+    const host = document.getElementById("medicineListHost");
+    const orgId = window.DZ_SESSION.profile.organization_id;
+    let query = window.dzSupabase.from("medicines").select("id, name, brand_name, form, strength, reorder_level, medicine_batches(qty, expiry_date)").eq("organization_id", orgId);
+    if (q) query = query.ilike("name", `%${q}%`);
+    const { data, error } = await query.limit(30);
+    if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+    if (!data || !data.length) { host.innerHTML = dzEmptyState("💊","No medicines found","Add your first medicine above."); return; }
+    host.innerHTML = data.map(m => {
+      const totalQty = (m.medicine_batches||[]).reduce((s,b)=>s+(b.qty||0),0);
+      const low = totalQty <= (m.reorder_level||10);
+      return `<div style="border:1px solid var(--slate-200);border-radius:7px;padding:8px 12px;margin-bottom:5px;display:flex;justify-content:space-between;font-size:12.5px">
+        <span><b>${m.name}</b> ${m.form||''} ${m.strength||''} ${m.brand_name?'('+m.brand_name+')':''}</span>
+        <span style="${low?'color:var(--signal-critical);font-weight:700':''}">Stock: ${totalQty}</span>
+      </div>`;
+    }).join("");
+  }, 250);
+}
+
+async function dzLoadLowStock() {
+  const host = document.getElementById("medicineListHost");
+  const orgId = window.DZ_SESSION.profile.organization_id;
+  const { data } = await window.dzSupabase.from("medicines").select("id, name, reorder_level, medicine_batches(qty)").eq("organization_id", orgId);
+  const low = (data||[]).map(m => ({...m, total: (m.medicine_batches||[]).reduce((s,b)=>s+(b.qty||0),0)})).filter(m => m.total <= (m.reorder_level||10));
+  host.innerHTML = low.length ? low.map(m => `<div style="border-left:3px solid var(--signal-critical);padding:6px 10px;margin-bottom:4px;font-size:12.5px">${m.name} — ${m.total} left (min ${m.reorder_level||10})</div>`).join("") : dzEmptyState("✓","No low-stock items","All medicines are above their minimum stock level.");
+}
+
+async function dzLoadExpiring() {
+  const host = document.getElementById("medicineListHost");
+  const orgId = window.DZ_SESSION.profile.organization_id;
+  const soon = new Date(); soon.setDate(soon.getDate()+60);
+  const { data } = await window.dzSupabase.from("medicine_batches").select("batch_no, expiry_date, qty, medicines(name)").eq("organization_id", orgId).lte("expiry_date", soon.toISOString().slice(0,10)).gt("qty", 0);
+  host.innerHTML = (data&&data.length) ? data.map(b => `<div style="border-left:3px solid var(--signal-warning);padding:6px 10px;margin-bottom:4px;font-size:12.5px">${b.medicines?.name||'?'} — batch ${b.batch_no||'-'} — expires ${b.expiry_date} — qty ${b.qty}</div>`).join("") : dzEmptyState("✓","Nothing expiring soon","No batches expiring within 60 days.");
+}
 
 async function dzLoadPharmMetrics() {
   try {
