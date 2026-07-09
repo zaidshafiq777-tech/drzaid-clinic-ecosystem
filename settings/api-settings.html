@@ -44,6 +44,7 @@
   const providers = [
     { key: "supabase", name: "Supabase (Database + Auth)", desc: "Patient records, tokens, RLS, staff auth.", testable: true },
     { key: "gemini",   name: "Gemini AI", desc: "Doctor drafts, patient chatbot, stock intake — via n8n proxy.", testable: true },
+    { key: "reportvision", name: "Report Vision / OCR (Gemini 2.5 Flash Vision)", desc: "PDF/image report reading — real, via n8n. Gemini API key is configured inside n8n, not in this app.", testable: true },
     { key: "n8n",      name: "n8n Automations", desc: "Server-side workflow engine.", testable: false, staticList: true },
     { key: "openai",   name: "OpenAI", desc: "Not connected — no credential configured.", testable: false },
     { key: "claude",   name: "Claude", desc: "Not connected — no credential configured.", testable: false },
@@ -99,7 +100,25 @@
       stEl.textContent = r.connected ? "Connected" : "Not Connected";
       detEl.textContent = `${r.detail} · ${r.latencyMs}ms`;
     }
+    if (key === "reportvision") {
+      const t0 = performance.now();
+      try {
+        const res = await fetch(window.DZ_CONFIG.N8N_BASE_URL + "/dz-report-vision-analyzer", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileName: "test.png", mimeType: "image/png", fileBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", reportType: "Other", patientContext: {} }),
+        });
+        const data = await res.json();
+        const ms = Math.round(performance.now() - t0);
+        stEl.className = "st " + (data.ok ? "on" : "off");
+        stEl.textContent = data.ok ? "Connected" : "Not Connected";
+        detEl.textContent = data.ok ? `Real Gemini Vision call succeeded · ${ms}ms · source: ${data.source}` : `${data.error || "Failed"} · ${ms}ms`;
+      } catch (e) {
+        stEl.className = "st off"; stEl.textContent = "Not Connected";
+        detEl.textContent = "Network error: " + e.message;
+      }
+    }
   };
+  document.getElementById("detail-reportvision").innerHTML += `<br>Webhook (not secret): <code>${window.DZ_CONFIG.N8N_BASE_URL}/dz-report-vision-analyzer</code><br><span style="color:var(--signal-warning)">Gemini API key must be configured inside n8n, not in this app.</span>`;
 })();
 </script>
 </body>
