@@ -58,7 +58,7 @@
 <script src="../shared/prescription-safety.js"></script>
 <script src="../shared/prescription-renderer.js"></script>
 <script>
-let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[];
+let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCurrentVitals=null;
 (async () => {
   const session = await dzRequireSession(["org_owner","branch_admin","super_admin","doctor"]);
   if (!session) return;
@@ -110,6 +110,7 @@ async function dzOpenPatient(i) {
     window.dzSupabase.from("active_medications").select("medicine_name").eq("patient_id", dzSelected.patient_id).eq("active", true),
   ]);
   const v = (vitalsRows||[])[0];
+  dzCurrentVitals = v || null;
   const vitalsLine = v ? `BP ${v.bp||'-'} · Pulse ${v.pulse||'-'} · Temp ${v.temperature||'-'} · SpO2 ${v.spo2||'-'}` + (v.is_abnormal ? ' <span class="dz-badge" style="background:#FDECEC;color:var(--signal-critical)">Abnormal</span>' : '') : 'No vitals recorded';
   const histLine = (history&&history.length) ? history.map(h=>`${new Date(h.created_at).toLocaleDateString()}: ${h.diagnosis||'—'}`).join('<br>') : 'No previous visits.';
   const allergyLine = (allergies&&allergies.length) ? allergies.map(a=>a.allergy+(a.severity?` (${a.severity})`:'')).join(', ') : 'None on file';
@@ -124,7 +125,21 @@ async function dzOpenPatient(i) {
       <div style="font-size:12.5px;margin-bottom:4px"><b>Allergies:</b> ${allergyLine}</div>
       <div style="font-size:12.5px;margin-bottom:4px"><b>Chronic conditions:</b> ${chronicLine}</div>
       <div style="font-size:12.5px;margin-bottom:4px"><b>Current medicines:</b> ${activeMedLine}</div>
-      <div style="font-size:12.5px"><b>Previous visits:</b><br>${histLine}</div>
+      <div style="font-size:12.5px;margin-bottom:8px"><b>Previous visits:</b><br>${histLine}</div>
+      <button class="ai-btn" onclick="dzToggleInlineVitals()" id="btnToggleVitals">${v ? '✎ Update Vitals' : '➕ Add Vitals'}</button>
+      <div id="inlineVitalsForm" style="display:none;margin-top:10px;background:var(--slate-50);border-radius:8px;padding:10px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:6px">
+          <input id="ivBp" placeholder="BP e.g. 120/80" value="${v?.bp||''}" style="padding:6px;border:1px solid var(--slate-200);border-radius:6px;font-size:12px">
+          <input id="ivPulse" type="number" placeholder="Pulse" value="${v?.pulse||''}" style="padding:6px;border:1px solid var(--slate-200);border-radius:6px;font-size:12px">
+          <input id="ivTemp" type="number" step="0.1" placeholder="Temp °F" value="${v?.temperature||''}" style="padding:6px;border:1px solid var(--slate-200);border-radius:6px;font-size:12px">
+          <input id="ivSpo2" type="number" placeholder="SpO2" value="${v?.spo2||''}" style="padding:6px;border:1px solid var(--slate-200);border-radius:6px;font-size:12px">
+          <input id="ivSugar" type="number" placeholder="RBS/FBS" value="${v?.rbs_fbs||''}" style="padding:6px;border:1px solid var(--slate-200);border-radius:6px;font-size:12px">
+          <input id="ivWeight" type="number" step="0.1" placeholder="Weight kg" value="${v?.weight||''}" style="padding:6px;border:1px solid var(--slate-200);border-radius:6px;font-size:12px">
+          <input id="ivHeight" type="number" placeholder="Height cm" value="${v?.height_cm||''}" style="padding:6px;border:1px solid var(--slate-200);border-radius:6px;font-size:12px">
+        </div>
+        <button class="primary-btn" style="margin-top:8px;padding:7px 14px" onclick="dzSaveInlineVitals()">Save Vitals</button>
+        <div id="inlineVitalsStatus" style="font-size:11.5px;margin-top:4px"></div>
+      </div>
     </div>
 
     <div class="listenerBox">
@@ -139,14 +154,26 @@ async function dzOpenPatient(i) {
         <span id="listenTimer" style="font-size:12px;font-family:var(--font-data);margin-left:8px"></span>
       </div>
       <div>
-        <button class="listen-btn start" id="btnStart" onclick="dzStartListening()">● START</button>
+        <button class="listen-btn start" id="btnStart" onclick="dzStartListening()">● START LISTENING</button>
         <button class="listen-btn pause" id="btnPause" onclick="dzPauseListening()" disabled>PAUSE</button>
         <button class="listen-btn ghost" id="btnResume" onclick="dzResumeListening()" disabled style="display:none">RESUME</button>
-        <button class="listen-btn stop" id="btnStop" onclick="dzStopAndAnalyze()" disabled>STOP &amp; ANALYZE</button>
+        <button class="listen-btn ghost" id="btnStop" onclick="dzStopListeningOnly()" disabled>STOP LISTENING</button>
+        <button class="listen-btn stop" id="btnAnalyze" onclick="dzAnalyzeTranscript()">ANALYZE &amp; GENERATE PRESCRIPTION</button>
       </div>
       <div style="margin-top:8px">
         <label style="font-size:11px;font-weight:600;color:var(--slate-700)">Transcript (editable — correct anything before analyzing)</label>
         <textarea id="transcriptBox" class="transcriptBox"></textarea>
+      </div>
+      <div class="fld" style="margin-top:10px">
+        <label>Paste Report Text (lab/imaging — optional)</label>
+        <textarea id="reportPasteBox" rows="3" placeholder="Paste CBC, LFT, X-ray, ultrasound report text here…"></textarea>
+        <button class="ai-btn" onclick="dzAnalyzeReportText()">Analyze Report Text</button>
+        <div id="reportPasteStatus" style="font-size:11.5px;color:var(--slate-500);margin-top:4px"></div>
+      </div>
+      <div class="fld" style="margin-top:6px">
+        <label>Upload Report (PDF / Image)</label>
+        <input type="file" id="reportFileInput" accept=".pdf,image/*" onchange="dzHandleReportFile(event)">
+        <div id="reportFileStatus" style="font-size:11.5px;color:var(--slate-500);margin-top:4px"></div>
       </div>
       <div id="analyzeStatus" style="font-size:12px;margin-top:6px"></div>
     </div>
@@ -187,7 +214,7 @@ async function dzOpenPatient(i) {
       <div id="rxWarnings"></div>
       <div id="rxPreviewHost">${dzEmptyState("📝","No draft yet","Start the consultation listener, or fill the form and use AI Assist.")}</div>
       <div id="rxPreviewActions" style="margin-top:10px;display:none">
-        <button class="ai-btn" onclick="dzStopAndAnalyze(true)">Regenerate</button>
+        <button class="ai-btn" onclick="dzAnalyzeTranscript(true)">Regenerate</button>
         <button class="ai-btn" onclick="dzPrintPrescription()">Print</button>
         <button class="ai-btn" onclick="alert('PDF export requires a rendering library not yet added — use Print → Save as PDF from the browser print dialog for now.')">Export PDF</button>
         <button class="ai-btn" onclick="alert('WhatsApp sending requires a WhatsApp Business API account — not connected yet. See MANUAL_SETUP_REQUIRED.md.')">Send WhatsApp Summary</button>
@@ -223,18 +250,55 @@ function dzReadMedsFromDom() {
 }
 function dzAddMedRow() { dzMeds.push({name:"",dosage:"",frequency:"",duration:""}); dzRenderMeds(); }
 
+function dzToggleInlineVitals() {
+  const el = document.getElementById("inlineVitalsForm");
+  el.style.display = el.style.display === "none" ? "block" : "none";
+}
+
+async function dzSaveInlineVitals() {
+  const status = document.getElementById("inlineVitalsStatus");
+  const bpParts = document.getElementById("ivBp").value.trim();
+  const v = {
+    bp: bpParts || null,
+    pulse: document.getElementById("ivPulse").value || null,
+    temperature: document.getElementById("ivTemp").value || null,
+    spo2: document.getElementById("ivSpo2").value || null,
+    rbs_fbs: document.getElementById("ivSugar").value || null,
+    weight: document.getElementById("ivWeight").value || null,
+    height_cm: document.getElementById("ivHeight").value || null,
+  };
+  v.bmi = dzComputeBMI(parseFloat(v.weight), parseFloat(v.height_cm)) || null;
+  const check = dzCheckVitalsAbnormal(v);
+  status.textContent = "Saving…";
+  try {
+    const { error } = await window.dzSupabase.from("vitals").insert({
+      organization_id: dzOrgId, visit_id: dzSelected.visit_id, patient_id: dzSelected.patient_id,
+      ...v, is_abnormal: check.isAbnormal, recorded_by: dzDoctorId,
+    });
+    if (error) throw error;
+    status.innerHTML = check.isAbnormal
+      ? `<span style="color:var(--signal-warning);font-weight:700">⚠ ${check.flags.join(", ")} — saved.</span>`
+      : `<span style="color:var(--signal-success);font-weight:700">✓ Vitals saved.</span>`;
+    dzCurrentVitals = { ...v, is_abnormal: check.isAbnormal };
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--signal-critical)">Save failed: ${e.message}</span>`;
+  }
+}
+
 // ============================================================
-// Milestone 4 — Live Consultation Listener + AI Prescription Generator
+// Milestone 4/5 — Live Consultation Listener + Report Intelligence + AI Prescription Generator
 // ============================================================
-let dzListener = null, dzTranscriptFinal = "", dzListenStart = null, dzListenTimerHandle = null, dzListenSeconds = 0;
+let dzListener = null, dzTranscriptFinal = "", dzListenTimerHandle = null, dzListenSeconds = 0;
+let dzReportSummaries = []; // real, AI-summarized report text only — never fabricated
+let dzLastDraft = null, dzLastContext = null;
 
 function dzInitListenerUI() {
   const supported = dzSpeechSupported();
   const note = document.getElementById("listenerSupportNote");
+  dzReportSummaries = [];
   if (!supported) {
-    note.innerHTML = `Browser voice recognition not supported. Please use Chrome, or type/paste the transcript manually below and click "STOP & ANALYZE".`;
+    note.innerHTML = `Browser voice recognition not supported. Please use Chrome, or type/paste the transcript manually below and click "ANALYZE & GENERATE PRESCRIPTION".`;
     document.getElementById("btnStart").disabled = true;
-    document.getElementById("btnStop").disabled = false; // manual transcript mode always works
   } else {
     note.textContent = "Free browser speech recognition (Chrome). Manual editing is always available.";
   }
@@ -249,25 +313,17 @@ function dzStartListening() {
   const lang = document.getElementById("listenLang").value;
   dzListener = dzCreateVoiceListener({
     lang,
-    onInterim: (text) => {
-      document.getElementById("transcriptBox").value = dzTranscriptFinal + " " + text;
-    },
-    onFinal: (text) => {
-      dzTranscriptFinal += text;
-      document.getElementById("transcriptBox").value = dzTranscriptFinal;
-    },
+    onInterim: (text) => { document.getElementById("transcriptBox").value = dzTranscriptFinal + " " + text; },
+    onFinal: (text) => { dzTranscriptFinal += text; document.getElementById("transcriptBox").value = dzTranscriptFinal; },
   });
   if (dzListener) dzListener.start();
   document.getElementById("listenStatus").textContent = dzListener ? "● Listening…" : "Manual mode (no voice support)";
   document.getElementById("btnStart").disabled = true;
   document.getElementById("btnPause").disabled = !dzListener;
-  document.getElementById("btnStop").disabled = false;
+  document.getElementById("btnStop").disabled = !dzListener;
   dzListenSeconds = 0;
   clearInterval(dzListenTimerHandle);
-  dzListenTimerHandle = setInterval(() => {
-    dzListenSeconds++;
-    document.getElementById("listenTimer").textContent = dzFormatTimer(dzListenSeconds);
-  }, 1000);
+  dzListenTimerHandle = setInterval(() => { dzListenSeconds++; document.getElementById("listenTimer").textContent = dzFormatTimer(dzListenSeconds); }, 1000);
 }
 
 function dzPauseListening() {
@@ -284,24 +340,62 @@ function dzResumeListening() {
   document.getElementById("listenStatus").textContent = "● Listening…";
   document.getElementById("btnPause").style.display = "inline-block";
   document.getElementById("btnResume").style.display = "none";
-  dzListenTimerHandle = setInterval(() => {
-    dzListenSeconds++;
-    document.getElementById("listenTimer").textContent = dzFormatTimer(dzListenSeconds);
-  }, 1000);
+  dzListenTimerHandle = setInterval(() => { dzListenSeconds++; document.getElementById("listenTimer").textContent = dzFormatTimer(dzListenSeconds); }, 1000);
 }
 
-async function dzStopAndAnalyze(isRegenerate) {
+/** STOP LISTENING — mic only. Finalizes the transcript. Does NOT call AI. */
+function dzStopListeningOnly() {
   if (dzListener) dzListener.stop();
   clearInterval(dzListenTimerHandle);
-  document.getElementById("listenStatus").textContent = "Stopped";
+  document.getElementById("listenStatus").textContent = "Stopped — transcript ready to review";
+  document.getElementById("btnStart").disabled = false;
+  document.getElementById("btnPause").disabled = true;
+  document.getElementById("btnStop").disabled = true;
+  document.getElementById("btnPause").style.display = "inline-block";
+  document.getElementById("btnResume").style.display = "none";
+}
+
+/** Paste-report-text mode — works today with existing AI, no OCR needed. */
+async function dzAnalyzeReportText() {
+  const box = document.getElementById("reportPasteBox");
+  const status = document.getElementById("reportPasteStatus");
+  const text = box.value.trim();
+  if (!text) { status.innerHTML = `<span style="color:var(--signal-critical)">Paste report text first.</span>`; return; }
+  status.textContent = "Summarizing report…";
+  const prompt = `You are summarizing a real lab/imaging report for a doctor's prescription. Source text:\n"""${text}"""\nWrite a 5-8 line summary (4-6 lines if imaging) covering: test/report name, date if present, abnormal values, impression, and a follow-up suggestion if relevant. Rules: use only what is in the text above — never invent a value not present. If imaging, start with "As per uploaded report,". End lab summaries with "Clinical correlation advised." if appropriate. Return plain text only, no JSON, no markdown.`;
+  const r = await AI.ask(prompt, { temperature: 0 });
+  if (!r.ok) { status.innerHTML = `<span style="color:var(--signal-critical)">${r.error}</span>`; return; }
+  dzReportSummaries.push(r.text.trim());
+  status.innerHTML = `<span style="color:var(--signal-success)">✓ Added to prescription context (${dzReportSummaries.length} report(s) attached).</span>`;
+  box.value = "";
+}
+
+/** File upload — honest: no OCR/vision backend is configured, so we say so clearly
+ *  rather than pretending to read the file. See N8N_WORKFLOWS_REQUIRED.md. */
+function dzHandleReportFile(evt) {
+  const f = evt.target.files[0];
+  const status = document.getElementById("reportFileStatus");
+  if (!f) return;
+  status.innerHTML = `<span style="color:var(--signal-warning)">Upload received (${dzEsc(f.name)}). OCR/vision backend required — not yet configured. Please use "Paste Report Text" above instead for now. See N8N_WORKFLOWS_REQUIRED.md.</span>`;
+  evt.target.value = "";
+}
+
+/** ANALYZE — the actual AI call. Separate from Stop Listening, as required. */
+async function dzAnalyzeTranscript(isRegenerate) {
+  if (dzListener) dzListener.stop();
+  clearInterval(dzListenTimerHandle);
   document.getElementById("btnStart").disabled = false;
   document.getElementById("btnPause").disabled = true;
   document.getElementById("btnStop").disabled = true;
 
   const transcript = document.getElementById("transcriptBox").value.trim();
   const analyzeStatus = document.getElementById("analyzeStatus");
-  if (!transcript && !isRegenerate) {
-    analyzeStatus.innerHTML = `<span style="color:var(--slate-500)">No transcript recorded — type or paste one above, then click STOP &amp; ANALYZE again.</span>`;
+  if (!transcript) {
+    analyzeStatus.innerHTML = `<span style="color:var(--signal-critical)">Transcript is empty. Record, or type/paste one above, then click ANALYZE again.</span>`;
+    return;
+  }
+  if (!dzSelected) {
+    analyzeStatus.innerHTML = `<span style="color:var(--signal-warning)">No patient selected — analysis needs a selected patient for real context. Select a patient from the queue first.</span>`;
     return;
   }
   analyzeStatus.innerHTML = `<span style="color:var(--slate-500)">Analyzing consultation with AI…</span>`;
@@ -309,7 +403,7 @@ async function dzStopAndAnalyze(isRegenerate) {
 
   try {
     const context = await dzGatherConsultationContext(dzSelected.patients, { id: dzSelected.visit_id, chief_complaint: dzSelected.visits?.chief_complaint }, dzSelected);
-    context.demographics.emr = context.demographics.emr; // already set
+    context.reportSummaries = dzReportSummaries;
     const r = await dzGeneratePrescriptionFromConsultation(transcript, context);
     if (!r.ok) {
       analyzeStatus.innerHTML = `<span style="color:var(--signal-critical)">${r.error}</span>`;
@@ -319,7 +413,6 @@ async function dzStopAndAnalyze(isRegenerate) {
     dzLastDraft = r.data;
     dzLastContext = context;
 
-    // Populate the existing (already-working) manual form fields with the AI draft — same save path, no duplicate logic.
     document.getElementById("pComplaints").value = r.data.chief_complaint || "";
     document.getElementById("pExam").value = [r.data.history, r.data.examination].filter(Boolean).join("\n");
     document.getElementById("pDiag").value = r.data.provisional_diagnosis || "";
@@ -331,11 +424,9 @@ async function dzStopAndAnalyze(isRegenerate) {
     if (!dzMeds.length) dzMeds = [{name:"",dosage:"",frequency:"",duration:""}];
     dzRenderMeds();
 
-    // Safety warnings — real, computed from real data.
     const warnings = dzRunSafetyChecks(r.data, context);
     document.getElementById("rxWarnings").innerHTML = warnings.map(w => `<div class="warnBar ${w.level}">${dzEsc(w.text)}</div>`).join("");
 
-    // Printable preview.
     document.getElementById("rxPreviewHost").innerHTML = dzRenderPrescriptionPreview(r.data, dzSelected.patients, { id: dzSelected.visit_id });
     document.getElementById("rxPreviewActions").style.display = "block";
 
@@ -344,7 +435,6 @@ async function dzStopAndAnalyze(isRegenerate) {
     analyzeStatus.innerHTML = `<span style="color:var(--signal-critical)">Analysis failed: ${e.message}</span>`;
   }
 }
-let dzLastDraft = null, dzLastContext = null;
 
 async function dzAiAction(kind) {
   const out = document.getElementById("aiOut");
