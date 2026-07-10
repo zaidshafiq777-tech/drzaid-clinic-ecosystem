@@ -469,16 +469,21 @@ async function dzUploadAndAnalyzeReport() {
   const rawResult = await dzUploadReportForVision(f, reportType, patientContext);
   const ms = Math.round(performance.now() - t0);
 
-  if (isOwnerTier) {
+  const showVisionDebug = isOwnerTier && (window.DZ_DEBUG === true);
+  if (showVisionDebug) {
     debugHost.style.display = "block";
     debugHost.textContent =
       `webhook: ${DZ_VISION_WEBHOOK}\n` +
       `fileName: ${f.name}\n` +
       `mimeType: ${f.type}\n` +
       `payloadSize: ~${Math.round(f.size/1024)} KB\n` +
-      `elapsed: ${ms}ms\n` +
+      `HTTP/elapsed: ${ms}ms\n` +
       `response.ok: ${rawResult.ok}\n` +
-      (rawResult.ok ? `confidence: ${rawResult.confidence}\nsource: ${rawResult.source}` : `error: ${rawResult.error}`);
+      `top-level keys: ${Object.keys(rawResult).join(", ")}\n` +
+      `normalization path: ${rawResult.source || "n/a"}\n` +
+      (rawResult.ok ? `confidence: ${rawResult.confidence}` : `raw error: ${rawResult.error}`);
+  } else {
+    debugHost.style.display = "none";
   }
 
   // dzNormalizeReportResult is the fix for the "raw JSON dump" bug: n8n's
