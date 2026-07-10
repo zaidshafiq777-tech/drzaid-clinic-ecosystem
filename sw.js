@@ -1,5 +1,5 @@
 // Dr. Zaid Healthcare OS — Service Worker (Milestone 1 shell)
-const CACHE_NAME = "drzaid-os-v2-force-refresh";
+const CACHE_NAME = "drzaid-os-v3-queue-fix";
 const APP_SHELL = [
   "shared/login.html",
   "shared/theme.css",
