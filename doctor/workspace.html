@@ -49,6 +49,8 @@
 <script src="../shared/auth.js"></script>
 <script src="../shared/shell.js"></script>
 <script src="../shared/clinical.js"></script>
+<script src="../shared/date-utils.js"></script>
+<script src="../shared/queue-service.js"></script>
 <script src="../shared/ai-manager.js"></script>
 <script src="../shared/automation-manager.js"></script>
 <script src="../shared/command-bar.js"></script>
@@ -80,44 +82,67 @@ let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCur
       <div id="dMain">${dzEmptyState("✚","Select a patient","Choose a patient from your queue on the left to begin.")}</div>
     </div>`;
   await dzLoadQueue();
+  dzStartDoctorPolling();
 })();
+
+// PART 6 — safe polling refresh (Supabase Realtime publication status for
+// `tokens` is not confirmed - see MANUAL_SETUP_REQUIRED.md for the manual
+// step needed if realtime push updates are wanted instead of polling).
+let dzDoctorPollHandle = null;
+function dzStartDoctorPolling() {
+  if (dzDoctorPollHandle) return;
+  dzDoctorPollHandle = setInterval(() => { if (!document.hidden) dzLoadQueue(); }, 12000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) dzLoadQueue(); });
 
 async function dzLoadQueue() {
   const host = document.getElementById("dQueue");
-  const { data, error } = await window.dzSupabase.from("tokens")
-    .select("id, token_number, visit_id, patient_id, status, created_at, patients(id, full_name, age, gender, phone, emr_number), visits(chief_complaint)")
-    .eq("organization_id", dzOrgId).in("status", DZ_DOCTOR_QUEUE_STATUSES)
-    .order("token_number");
-  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
-  console.log("[Queue Debug] doctor query result", data);
-  dzQueue = data || [];
+  const { rows, debug } = await dzLoadQueueService(dzOrgId, { onlyToday: false, statusFilter: DZ_DOCTOR_QUEUE_STATUSES });
+  // Map the normalized queue-service shape back to the legacy shape the rest
+  // of this file already reads (dzSelected.id / .patient_id / .visit_id /
+  // .patients.full_name / .visits.chief_complaint / .token_number) - this
+  // fixes the actual fetch bug (fragile nested select + timezone) without
+  // requiring every one of the 21 downstream references in this file to change.
+  dzQueue = rows.map(r => ({
+    id: r.tokenId, token_number: r.tokenNumber, visit_id: r.visitId, patient_id: r.patientId,
+    status: r.status, created_at: r.createdAt,
+    patients: r.patient ? { id: r.patient.id, full_name: r.patient.fullName, age: r.patient.age, gender: r.patient.gender, phone: r.patient.phone, emr_number: r.patient.emrNumber } : null,
+    visits: r.visit ? { chief_complaint: r.visit.chiefComplaint } : null,
+  }));
+  console.log("[Queue Debug] doctor query result (raw)", debug);
+  console.log("[Queue Debug] doctor query result (normalized)", dzQueue);
   host.innerHTML = dzQueue.length ? dzQueue.map((t,i) =>
     `<div class="qItem ${dzSelected?.id===t.id?'active':''}" onclick="dzOpenPatient(${i})">
        <div class="tk">#${t.token_number} &middot; ${t.status==='with_doctor'?'In progress':DZ_STATUS_LABEL[t.status]||t.status}</div>
-       <div style="font-weight:600;font-size:13px">${t.patients?.full_name||''}</div>
+       <div style="font-weight:600;font-size:13px">${t.patients?.full_name||'<span style="color:var(--signal-warning)">Patient record unavailable</span>'}</div>
        <div style="font-size:11.5px;color:var(--slate-500)">${t.visits?.chief_complaint||''}</div>
        ${t.status===DZ_STATUS.REGISTERED ? `<div style="font-size:10.5px;color:var(--signal-warning);margin-top:2px">⚠ Not sent to doctor yet</div>` : ""}
      </div>`).join("") : `<div style="font-size:12px;color:var(--slate-500)">Queue is empty.</div>`;
-  dzRenderQueueDebug(dzQueue);
+  dzRenderQueueDebug(dzQueue, debug);
 }
 
 /** Owner/dev-only debug panel - shows exactly which patients loaded, why,
- *  and full IDs/timestamps for tracing the queue lifecycle. */
-function dzRenderQueueDebug(rows) {
+ *  and full IDs/timestamps for tracing the queue lifecycle. Only visible
+ *  when window.DZ_DEBUG === true (set via console or a future Settings toggle). */
+function dzRenderQueueDebug(rows, debug) {
   const isOwnerTier = ["org_owner","branch_admin","super_admin"].includes(window.DZ_SESSION?.profile?.role);
+  const showDebug = isOwnerTier && (window.DZ_DEBUG === true);
   let panel = document.getElementById("queueDebugPanel");
-  if (!isOwnerTier) { if (panel) panel.remove(); return; }
+  if (!showDebug) { if (panel) panel.remove(); return; }
   if (!panel) {
     panel = document.createElement("div");
     panel.id = "queueDebugPanel";
-    panel.style.cssText = "margin-top:10px;background:#0f172a;color:#94a3b8;border-radius:8px;padding:8px;font-family:var(--font-data);font-size:10px;max-height:200px;overflow:auto";
+    panel.style.cssText = "margin-top:10px;background:#0f172a;color:#94a3b8;border-radius:8px;padding:8px;font-family:var(--font-data);font-size:10px;max-height:220px;overflow:auto";
     document.getElementById("dQueue").parentElement.appendChild(panel);
   }
-  panel.innerHTML = `<b style="color:#e2e8f0">Queue Debug (${rows.length} rows, statuses: ${DZ_DOCTOR_QUEUE_STATUSES.join(",")})</b><br>` +
-    rows.map(t => `patient=${t.patient_id?.slice(0,8)} visit=${t.visit_id?.slice(0,8)} token=${t.id?.slice(0,8)} #${t.token_number} status=${t.status} created=${new Date(t.created_at).toLocaleTimeString()}`).join("<br>");
+  panel.innerHTML = `<b style="color:#e2e8f0">Doctor Queue Debug</b><br>
+    Raw rows: ${debug.rawTokenCount} · Normalized: ${debug.normalizedCount} · Excluded: ${debug.excluded.length}<br>
+    Selected: token=${dzSelected?.id?.slice(0,8)||'-'} visit=${dzSelected?.visit_id?.slice(0,8)||'-'} patient=${dzSelected?.patient_id?.slice(0,8)||'-'} status=${dzSelected?.status||'-'}<br>` +
+    rows.map(t => `token=${t.id?.slice(0,8)} #${t.token_number} status=${t.status} patient=${t.patient_id?.slice(0,8)||'MISSING'}`).join("<br>");
 }
 
 async function dzOpenPatient(i) {
+  const previouslySelectedId = dzSelected?.id;
   dzSelected = dzQueue[i];
   dzMeds = [{name:"",dosage:"",frequency:"",duration:""}];
   dzTranscriptFinal = ""; dzListener = null;
@@ -125,6 +150,12 @@ async function dzOpenPatient(i) {
   if (dzSelected.visit_id) await window.dzSupabase.from("visits").update({ status: DZ_STATUS.WITH_DOCTOR }).eq("id", dzSelected.visit_id);
   console.log("[Queue Debug] doctor opened patient, status -> with_doctor", { tokenId: dzSelected.id, visitId: dzSelected.visit_id });
   await dzLoadQueue();
+  // dzLoadQueue rebuilds dzQueue and re-renders, but does not clear dzSelected -
+  // re-find the same token in the fresh list so status badges stay accurate
+  // while the doctor keeps working on the same patient (PART 5 requirement:
+  // "Do not clear the selected patient merely because queue refresh runs").
+  const stillThere = dzQueue.find(t => t.id === dzSelected.id);
+  if (stillThere) dzSelected = stillThere;
 
   const [{data:vitalsRows}, {data:history}, {data:allergies}, {data:chronic}, {data:activeMeds}] = await Promise.all([
     window.dzSupabase.from("vitals").select("*").eq("visit_id", dzSelected.visit_id).order("created_at",{ascending:false}).limit(1),
