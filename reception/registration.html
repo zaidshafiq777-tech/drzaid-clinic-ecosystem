@@ -143,11 +143,13 @@ async function dzOpenForm(phone, existing) {
 }
 
 async function dzSaveRegistration() {
+  if (window._dzRegistrationInProgress) return; // extra guard beyond button-disable, in case of rapid double-events
   const name = document.getElementById("fName").value.trim();
   const phone = dzNormalizePhone(document.getElementById("fPhone").value.trim());
   const complaint = document.getElementById("fComplaint").value.trim();
   const status = document.getElementById("saveStatus");
   if (!name || !phone || !complaint) { status.innerHTML = `<span style="color:var(--signal-critical)">Name, phone and chief complaint are required.</span>`; return; }
+  window._dzRegistrationInProgress = true;
   const btn = document.getElementById("saveBtn");
   btn.disabled = true; btn.textContent = "Saving…";
   try {
@@ -205,11 +207,14 @@ async function dzSaveRegistration() {
     if (tErr) throw tErr;
     console.log("[Queue Debug] token created", { tokenId: token.id, tokenNumber: token.token_number, status: DZ_STATUS.WAITING_DOCTOR });
 
-    status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Token #${token.token_number} created for ${name} (EMR: ${assignedEmr || '—'}).</span>`;
-    setTimeout(() => (window.location.href = "dashboard.html"), 1200);
+    status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Token #${token.token_number} created for ${name} (EMR: ${assignedEmr || '—'}).</span>
+      <br><a href="dashboard.html" style="color:var(--clinical-700);font-weight:600">Back to Reception Queue</a> &middot;
+      <a href="../doctor/workspace.html" style="color:var(--clinical-700);font-weight:600">Open Doctor Workspace</a>`;
+    setTimeout(() => (window.location.href = "dashboard.html"), 2500);
   } catch (e) {
     status.innerHTML = `<span style="color:var(--signal-critical)">Save failed: ${e.message}</span>`;
     btn.disabled = false; btn.textContent = "Save & Create Token";
+    window._dzRegistrationInProgress = false;
   }
 }
 </script>
