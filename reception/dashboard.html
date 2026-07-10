@@ -19,6 +19,8 @@
 <script src="../shared/shell.js"></script>
 <script src="../shared/clinical.js"></script>
 <script src="../shared/visit-status.js"></script>
+<script src="../shared/date-utils.js"></script>
+<script src="../shared/queue-service.js"></script>
 <script src="../shared/ai-manager.js"></script>
 <script src="../shared/automation-manager.js"></script>
 <script src="../shared/command-bar.js"></script>
@@ -55,13 +57,13 @@
 async function dzLoadMetrics() {
   try {
     const orgId = window.DZ_SESSION.profile.organization_id;
-    const today = new Date(); today.setHours(0,0,0,0);
+    const { startUtc, endUtc } = dzGetClinicDayRange("Asia/Karachi");
     const [{count:tokensToday}, {data:waitingRows}, {count:pending}] = await Promise.all([
-      window.dzSupabase.from("tokens").select("id",{count:"exact",head:true}).eq("organization_id",orgId).gte("created_at",today.toISOString()),
-      window.dzSupabase.from("tokens").select("status").eq("organization_id",orgId).gte("created_at",today.toISOString()),
+      window.dzSupabase.from("tokens").select("id",{count:"exact",head:true}).eq("organization_id",orgId).gte("created_at",startUtc).lt("created_at",endUtc),
+      window.dzSupabase.from("tokens").select("status").eq("organization_id",orgId).gte("created_at",startUtc).lt("created_at",endUtc),
       window.dzSupabase.from("bookings").select("id",{count:"exact",head:true}).eq("organization_id",orgId).eq("status","pending_payment"),
     ]);
-    const waiting = (waitingRows||[]).filter(t=>["registered","waiting_vitals","vitals_done","waiting_doctor","with_doctor"].includes(t.status)).length;
+    const waiting = (waitingRows||[]).filter(t=>DZ_ACTIVE_TOKEN_STATUSES.includes(t.status)).length;
     document.getElementById("metrics").innerHTML =
       dzCard("Today's Tokens", tokensToday ?? 0, "Live") +
       dzCard("Waiting Now", waiting, "Live") +
@@ -75,28 +77,21 @@ async function dzLoadQueue() {
   host.innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">Loading…</div>`;
   try {
     const orgId = window.DZ_SESSION.profile.organization_id;
-    const today = new Date(); today.setHours(0,0,0,0);
-    const { data, error } = await window.dzSupabase
-      .from("tokens")
-      .select("id, visit_id, token_number, status, source, priority, payment_status, created_at, patients(full_name), visits(visit_mode, chief_complaint)")
-      .eq("organization_id", orgId)
-      .gte("created_at", today.toISOString())
-      .order("token_number", { ascending: true });
-    if (error) throw error;
-    console.log("[Queue Debug] reception query result", data);
-    if (!data || !data.length) { host.innerHTML = dzEmptyState("▤","No patients yet today","Register a patient to start today's queue."); return; }
+    const { rows, debug } = await dzLoadQueueService(orgId, { onlyToday: true });
+    dzRenderReceptionDebug(debug);
+    if (!rows.length) { host.innerHTML = dzEmptyState("▤","No patients yet today","Register a patient to start today's queue."); return; }
     host.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead><tr style="text-align:left;color:var(--slate-500);font-size:11px;text-transform:uppercase">
         <th style="padding:8px 6px">Token</th><th>Patient</th><th>Visit</th><th>Status</th><th>Waiting</th><th>Payment</th><th>Action</th>
       </tr></thead>
-      <tbody>${data.map(t => `
+      <tbody>${rows.map(t => `
         <tr style="border-top:1px solid var(--slate-100)">
-          <td style="padding:8px 6px;font-family:var(--font-data)">#${t.token_number}</td>
-          <td>${t.patients?.full_name || "—"}</td>
-          <td>${t.visits?.visit_mode === "online" ? "Online" : "In-Clinic"}</td>
+          <td style="padding:8px 6px;font-family:var(--font-data)">#${t.tokenNumber}</td>
+          <td>${t.patient ? t.patient.fullName : '<span style="color:var(--signal-warning)">Patient record unavailable</span>'}</td>
+          <td>${t.visit ? (t.visit.visitMode === "online" ? "Online" : "In-Clinic") : '<span style="color:var(--signal-warning)">Visit unavailable</span>'}</td>
           <td><span class="dz-badge live">${DZ_STATUS_LABEL[t.status] || t.status}</span></td>
-          <td>${dzWaitingMinutes(t.created_at)} min</td>
-          <td>${t.payment_status}</td>
+          <td>${dzWaitingMinutes(t.createdAt)} min</td>
+          <td>${t.paymentStatus}</td>
           <td>${dzActionButtons(t)}</td>
         </tr>`).join("")}</tbody></table>`;
   } catch (e) {
@@ -104,21 +99,40 @@ async function dzLoadQueue() {
   }
 }
 
+/** Owner-only debug panel per PART 8 - not shown to reception/doctor in normal use. */
+function dzRenderReceptionDebug(debug) {
+  const isOwnerTier = ["org_owner","branch_admin","super_admin"].includes(window.DZ_SESSION?.profile?.role);
+  const showDebug = isOwnerTier && (window.DZ_DEBUG === true);
+  let panel = document.getElementById("receptionDebugPanel");
+  if (!showDebug) { if (panel) panel.remove(); return; }
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "receptionDebugPanel";
+    panel.style.cssText = "margin-top:10px;background:#0f172a;color:#94a3b8;border-radius:8px;padding:8px;font-family:var(--font-data);font-size:10px;max-height:220px;overflow:auto";
+    document.getElementById("queueTable").parentElement.appendChild(panel);
+  }
+  panel.innerHTML = `<b style="color:#e2e8f0">Reception Debug</b><br>
+    Clinic day range: ${debug.dayRange?.startUtc} → ${debug.dayRange?.endUtc}<br>
+    Raw token count: ${debug.rawTokenCount} · Patient fetch: ${debug.patientFetchCount} · Visit fetch: ${debug.visitFetchCount} · Normalized: ${debug.normalizedCount}<br>
+    ${debug.steps.join("<br>")}<br>
+    ${debug.excluded.length ? "<b>Excluded:</b><br>" + debug.excluded.map(x=>JSON.stringify(x)).join("<br>") : "No exclusions."}`;
+}
+
 /** One button per status, matching the canonical lifecycle in shared/visit-status.js. */
 function dzActionButtons(t) {
   const btn = (label, fn) => `<button class="ghost-refresh" style="padding:5px 10px;font-size:11.5px;margin-right:4px" onclick="${fn}">${label}</button>`;
   switch (t.status) {
     case DZ_STATUS.REGISTERED:
-      return btn("Send to Vitals", `dzTransition('${t.id}','${t.visit_id}','${DZ_STATUS.WAITING_VITALS}')`) +
-             btn("Send to Doctor", `dzTransition('${t.id}','${t.visit_id}','${DZ_STATUS.WAITING_DOCTOR}')`);
+      return btn("Send to Vitals", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.WAITING_VITALS}')`) +
+             btn("Send to Doctor", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.WAITING_DOCTOR}')`);
     case DZ_STATUS.WAITING_VITALS:
     case DZ_STATUS.VITALS_DONE:
-      return btn("Send to Doctor", `dzTransition('${t.id}','${t.visit_id}','${DZ_STATUS.WAITING_DOCTOR}')`);
+      return btn("Send to Doctor", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.WAITING_DOCTOR}')`);
     case DZ_STATUS.WAITING_DOCTOR:
-      return btn("Mark With Doctor", `dzTransition('${t.id}','${t.visit_id}','${DZ_STATUS.WITH_DOCTOR}')`);
+      return btn("Mark With Doctor", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.WITH_DOCTOR}')`);
     case DZ_STATUS.WITH_DOCTOR:
     case DZ_STATUS.DOCTOR_DONE:
-      return btn("Complete", `dzTransition('${t.id}','${t.visit_id}','${DZ_STATUS.COMPLETED}')`);
+      return btn("Complete", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.COMPLETED}')`);
     default:
       return "";
   }
@@ -134,13 +148,24 @@ async function dzTransition(tokenId, visitId, newStatus) {
   try {
     const { error: tErr } = await window.dzSupabase.from("tokens").update({ status: newStatus }).eq("id", tokenId);
     if (tErr) throw tErr;
-    if (visitId) await window.dzSupabase.from("visits").update({ status: newStatus }).eq("id", visitId);
+    if (visitId && visitId !== "null") await window.dzSupabase.from("visits").update({ status: newStatus }).eq("id", visitId);
     console.log("[Queue Debug] status transitioned", { tokenId, visitId, newStatus });
     await dzLoadQueue();
   } catch (e) {
     alert("Could not update status: " + e.message);
   }
 }
+
+// PART 6 — polling refresh (safe fallback since Supabase Realtime publication
+// status for `tokens` is not confirmed - see MANUAL_SETUP_REQUIRED.md).
+// Stops while the tab is hidden, resumes when visible again.
+let dzReceptionPollHandle = null;
+function dzStartReceptionPolling() {
+  if (dzReceptionPollHandle) return;
+  dzReceptionPollHandle = setInterval(() => { if (!document.hidden) { dzLoadQueue(); dzLoadMetrics(); } }, 12000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { dzLoadQueue(); dzLoadMetrics(); } });
+dzStartReceptionPolling();
 </script>
 <script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("../sw.js").catch(()=>{})})}</script>
 </body>
