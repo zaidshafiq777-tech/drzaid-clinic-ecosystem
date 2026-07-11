@@ -6,10 +6,27 @@
 
 function dzEsc(s) { return String(s == null ? "" : s).replace(/</g, "&lt;"); }
 
-function dzRenderPrescriptionPreview(draft, patient, visitMeta) {
+function dzRenderPrescriptionPreview(draft, patient, visitMeta, headerConfig) {
   const compact = draft.one_page_mode !== false; // ON by default per Milestone 5 spec
   const gap = compact ? 6 : 8;
   const fs = compact ? 12.5 : 13;
+
+  // headerConfig comes from getPrescriptionHeaderConfig() (organization-settings-service.js).
+  // Falls back to safe generic placeholders (never a hardcoded specific clinic name)
+  // if the caller didn't pass one - this should not normally happen since every
+  // real call site fetches it first, but a missing organization must never crash
+  // prescription rendering.
+  const hc = headerConfig || {};
+  const hs = hc.settings || {};
+  const primaryColor = "var(--clinical-700)";
+
+  const headerHtml = `
+    ${hs.show_logo !== false && hc.logoUrl ? `<img src="${dzEsc(hc.logoUrl)}" style="height:34px;margin-bottom:4px">` : ""}
+    ${hs.show_clinic_name !== false ? `<div style="font-size:16px;font-weight:800;color:${primaryColor}">${dzEsc(hc.clinicName || "Clinic Name Not Configured")}</div>` : ""}
+    ${hs.show_doctor_name !== false ? `<div style="font-size:11.5px;color:var(--slate-500)">${dzEsc(hc.doctorName || "")}${hs.show_qualifications !== false && hc.qualification ? " &middot; " + dzEsc(hc.qualification) : ""}${hc.title ? " &middot; " + dzEsc(hc.title) : ""}</div>` : ""}
+    ${hs.show_address !== false || hs.show_contact !== false ? `<div style="font-size:11px;color:var(--slate-500)">${hs.show_address !== false ? dzEsc(hc.address || "") : ""}${hs.show_contact !== false && hc.phone ? " &middot; " + dzEsc(hc.phone) : ""}</div>` : ""}
+    ${hs.show_registration_number !== false && hc.registrationNumber ? `<div style="font-size:10.5px;color:var(--slate-500)">Reg. No: ${dzEsc(hc.registrationNumber)}</div>` : ""}
+  `;
 
   const meds = (draft.medicines || []).map((m, i) => `
     <div style="margin-bottom:${compact?4:8}px">
@@ -26,14 +43,14 @@ function dzRenderPrescriptionPreview(draft, patient, visitMeta) {
     ? `<div style="margin-bottom:${gap}px"><b>Reports / Investigations Summary:</b> ${dzEsc(draft.reports_summary)}</div>` : "";
   const overflowWarning = !compact
     ? `<div style="background:#FFF7E6;color:var(--signal-warning);font-size:11px;padding:6px 10px;border-radius:6px;margin-bottom:10px">Prescription may exceed one page due to reports/history.</div>` : "";
+  const aiDisclaimer = hs.show_ai_disclaimer !== false
+    ? `<div style="font-size:10px;color:var(--slate-500)">Generated with AI assistance &middot; reviewed by doctor</div>` : "";
 
   return `
   <div id="rxPrintArea" style="background:#fff;padding:${compact?16:22}px;border:1px solid var(--slate-200);border-radius:10px;font-size:${fs}px;line-height:${compact?1.4:1.55}">
     ${overflowWarning}
-    <div style="text-align:center;border-bottom:2px solid var(--clinical-700);padding-bottom:${compact?6:10}px;margin-bottom:${compact?8:14}px">
-      <div style="font-size:16px;font-weight:800;color:var(--clinical-700)">Dr. Zaid Shafique</div>
-      <div style="font-size:11.5px;color:var(--slate-500)">MBBS &middot; Family Physician</div>
-      <div style="font-size:11px;color:var(--slate-500)">Dr. Zaid Shafique Clinic, Main Bazar, Purani Mandi, Pattoki &middot; 0327-4845413</div>
+    <div style="text-align:center;border-bottom:2px solid ${primaryColor};padding-bottom:${compact?6:10}px;margin-bottom:${compact?8:14}px">
+      ${headerHtml}
     </div>
     <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:${gap+4}px">
       <div><b>${dzEsc(patient.full_name)}</b><br>${patient.age||'?'} y &middot; ${dzEsc(patient.gender)||'-'} &middot; EMR ${dzEsc(patient.emr_number)||'—'}</div>
@@ -53,8 +70,9 @@ function dzRenderPrescriptionPreview(draft, patient, visitMeta) {
     ${draft.referral && draft.referral !== "Not clearly mentioned" ? `<div style="margin-bottom:${gap}px"><b>Referral:</b> ${dzEsc(draft.referral)}</div>` : ""}
     <div style="margin-top:${compact?14:24}px;display:flex;justify-content:space-between;font-size:10.5px;color:var(--slate-500)">
       <span>Doctor Signature: ______________</span>
-      <span>Generated with AI assistance &middot; reviewed by doctor</span>
+      ${aiDisclaimer}
     </div>
+    ${hc.footerText ? `<div style="text-align:center;font-size:10px;color:var(--slate-500);margin-top:6px;border-top:1px solid var(--slate-100);padding-top:6px">${dzEsc(hc.footerText)}</div>` : ""}
   </div>`;
 }
 
