@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Organization Profile — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  .tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--slate-200);margin-bottom:16px}
+  .tab{padding:10px 14px;font-size:12.5px;font-weight:600;color:var(--slate-500);border-bottom:2px solid transparent;white-space:nowrap;cursor:pointer}
+  .tab.active{color:var(--clinical-700);border-color:var(--clinical-700)}
+  .tabpanel{display:none}
+  .tabpanel.active{display:block}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .fld label{font-size:11.5px;font-weight:600;color:var(--slate-700);display:block;margin-bottom:4px}
+  .fld input,.fld select,.fld textarea{width:100%;padding:9px 11px;border:1px solid var(--slate-200);border-radius:7px;font-size:13.5px;font-family:inherit;box-sizing:border-box}
+  .fld{margin-bottom:12px}
+  .check{display:flex;align-items:center;gap:6px;font-size:12.5px;margin-bottom:8px}
+  .savebar{position:sticky;bottom:0;background:#fff;border-top:1px solid var(--slate-200);padding:12px 0;margin-top:16px;display:flex;justify-content:space-between;align-items:center}
+  .colorfld input[type=color]{height:38px;padding:2px}
+  .assetPreview{width:60px;height:60px;object-fit:contain;border:1px solid var(--slate-200);border-radius:6px;margin-bottom:6px;background:var(--slate-50)}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/organization-settings-service.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>
+let dzOrg = null, dzDirty = false;
+(async () => {
+  const session = await requireRole(["org_owner","branch_admin","super_admin"]);
+  if (!session) return;
+  dzRenderShell({ activeKey: "settings", title: "Organization Profile", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div><h2 style="margin:0">Organization / Clinic Profile</h2><div class="sub" id="lastSaved">Loading…</div></div>
+        <div><a href="#" onclick="dzShowPreview();return false" class="dz-badge live" style="cursor:pointer">Preview Prescription Header</a></div>
+      </div>
+      <div class="tabs" id="tabs"></div>
+      <form id="orgForm"><div id="tabPanels"></div></form>
+      <div id="previewHost"></div>
+      <div class="savebar">
+        <span id="dirtyIndicator" style="font-size:12px;color:var(--signal-warning);display:none">● Unsaved changes</span>
+        <div>
+          <button type="button" class="ghost-refresh" onclick="dzResetForm()">Reset Unsaved Changes</button>
+          <button type="button" class="primary-link" style="border:none" onclick="dzSaveOrg()">Save Changes</button>
+        </div>
+      </div>
+      <div id="saveStatus" style="font-size:12.5px;margin-top:8px"></div>
+    </div>`;
+  await dzLoadForm();
+})();
+
+const DZ_TABS = ["General","Contact","Address","Branding","Clinic Hours","Doctor Details","Prescription","Payments","Localization","Features"];
+
+async function dzLoadForm() {
+  dzOrg = await loadOrganizationSettings();
+  if (!dzOrg) {
+    document.getElementById("dz-content").innerHTML = `<div class="dz-panel">${dzEmptyState("⚠","No organization assigned","Contact administrator.")}</div>`;
+    return;
+  }
+  document.getElementById("lastSaved").textContent = `Last saved: ${new Date(dzOrg.updated_at||dzOrg.created_at).toLocaleString()}`;
+
+  document.getElementById("tabs").innerHTML = DZ_TABS.map((t,i) => `<div class="tab ${i===0?'active':''}" onclick="dzSwitchTab(${i})">${t}</div>`).join("");
+  document.getElementById("tabPanels").innerHTML = DZ_TABS.map((t,i) => `<div class="tabpanel ${i===0?'active':''}" id="panel-${i}">${dzTabContent(i)}</div>`).join("");
+  dzFillForm();
+  document.getElementById("orgForm").addEventListener("input", () => { dzDirty = true; document.getElementById("dirtyIndicator").style.display = "inline"; });
+}
+
+function dzSwitchTab(i) {
+  document.querySelectorAll(".tab").forEach((t,idx) => t.classList.toggle("active", idx===i));
+  document.querySelectorAll(".tabpanel").forEach((p,idx) => p.classList.toggle("active", idx===i));
+}
+
+function dzTabContent(i) {
+  const ps = dzOrg.prescription_settings || {};
+  const fs = dzOrg.feature_settings || {};
+  switch (i) {
+    case 0: return `<div class="grid2">
+      <div class="fld"><label>Organization Name *</label><input id="f_name"></div>
+      <div class="fld"><label>Short Name</label><input id="f_short_name"></div>
+      <div class="fld"><label>Organization Type</label><select id="f_organization_type">
+        ${["clinic","hospital","pharmacy","diagnostic_center","medical_center","telemedicine_clinic","other"].map(v=>`<option value="${v}">${v.replace(/_/g," ")}</option>`).join("")}
+      </select></div>
+      <div class="fld" style="grid-column:1/-1"><label>Tagline</label><input id="f_tagline"></div>
+      <div class="fld" style="grid-column:1/-1"><label>Description</label><textarea id="f_description" rows="2"></textarea></div>
+    </div>`;
+    case 1: return `<div class="grid2">
+      <div class="fld"><label>Primary Phone *</label><input id="f_phone_primary"></div>
+      <div class="fld"><label>Secondary Phone</label><input id="f_phone_secondary"></div>
+      <div class="fld"><label>WhatsApp Number</label><input id="f_whatsapp"></div>
+      <div class="fld"><label>Email</label><input id="f_email" type="email"></div>
+      <div class="fld"><label>Website</label><input id="f_website"></div>
+      <div class="fld"><label>Emergency Contact</label><input id="f_emergency_contact"></div>
+    </div>`;
+    case 2: return `<div class="grid2">
+      <div class="fld"><label>Country</label><input id="f_country"></div>
+      <div class="fld"><label>Province / State</label><input id="f_province"></div>
+      <div class="fld"><label>City</label><input id="f_city"></div>
+      <div class="fld"><label>Postal Code</label><input id="f_postal_code"></div>
+      <div class="fld" style="grid-column:1/-1"><label>Full Address *</label><input id="f_address"></div>
+      <div class="fld" style="grid-column:1/-1"><label>Google Maps Link</label><input id="f_maps_url"></div>
+    </div>`;
+    case 3: return `<div class="grid2">
+      <div class="fld"><label>Logo</label><img class="assetPreview" id="preview_logo_url"><br><input type="file" accept="image/*" onchange="dzUploadAsset(this,'logo','logo_url')"></div>
+      <div class="fld"><label>Prescription Logo</label><img class="assetPreview" id="preview_prescription_logo_url"><br><input type="file" accept="image/*" onchange="dzUploadAsset(this,'prescription-logo','prescription_logo_url')"></div>
+      <div class="fld colorfld"><label>Primary Color</label><input id="f_primary_color" type="color"></div>
+      <div class="fld colorfld"><label>Secondary Color</label><input id="f_secondary_color" type="color"></div>
+      <div class="fld colorfld"><label>Accent Color</label><input id="f_accent_color" type="color"></div>
+      <div class="fld" style="grid-column:1/-1"><label>Footer Text</label><input id="f_footer_text"></div>
+    </div>`;
+    case 4: return `<div class="grid2">
+      ${["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map(d=>`<div class="fld"><label>${d}</label><input id="f_hours_${d.toLowerCase()}" placeholder="e.g. 4:00 PM - 8:00 PM or Closed"></div>`).join("")}
+    </div>`;
+    case 5: return `<div class="grid2">
+      <div class="fld"><label>Default Doctor Name</label><input id="f_default_doctor_name"></div>
+      <div class="fld"><label>Qualification</label><input id="f_default_doctor_qualification"></div>
+      <div class="fld"><label>Professional Title</label><input id="f_default_doctor_title"></div>
+      <div class="fld"><label>Registration Number</label><input id="f_default_doctor_registration_number"></div>
+    </div>`;
+    case 6: return `<div class="grid2">
+      <div style="grid-column:1/-1">
+        <div class="check"><input type="checkbox" id="ps_show_logo" ${ps.show_logo!==false?'checked':''}> Show Logo</div>
+        <div class="check"><input type="checkbox" id="ps_show_clinic_name" ${ps.show_clinic_name!==false?'checked':''}> Show Clinic Name</div>
+        <div class="check"><input type="checkbox" id="ps_show_doctor_name" ${ps.show_doctor_name!==false?'checked':''}> Show Doctor Name</div>
+        <div class="check"><input type="checkbox" id="ps_show_qualifications" ${ps.show_qualifications!==false?'checked':''}> Show Qualifications</div>
+        <div class="check"><input type="checkbox" id="ps_show_contact" ${ps.show_contact!==false?'checked':''}> Show Contact</div>
+        <div class="check"><input type="checkbox" id="ps_show_address" ${ps.show_address!==false?'checked':''}> Show Address</div>
+        <div class="check"><input type="checkbox" id="ps_show_registration_number" ${ps.show_registration_number!==false?'checked':''}> Show Registration Number</div>
+        <div class="check"><input type="checkbox" id="ps_show_ai_disclaimer" ${ps.show_ai_disclaimer!==false?'checked':''}> Show AI-Assisted Disclaimer</div>
+        <div class="check"><input type="checkbox" id="ps_compact_mode_default" ${ps.compact_mode_default!==false?'checked':''}> Compact One-Page Mode (default ON)</div>
+        <div class="check"><input type="checkbox" id="ps_urdu_advice_enabled" ${ps.urdu_advice_enabled!==false?'checked':''}> Urdu Advice Enabled</div>
+      </div>
+      <div class="fld"><label>Print Paper Size</label><select id="ps_paper_size"><option value="A4">A4</option><option value="A5">A5</option><option value="Thermal">Thermal</option></select></div>
+      <div class="fld"><label>Prescription Number Prefix</label><input id="f_prescription_prefix"></div>
+    </div>`;
+    case 7: return `<div class="grid2">
+      <div class="fld"><label>Default Consultation Fee</label><input id="f_consultation_fee" type="number"></div>
+      <div class="fld"><label>Follow-up Fee</label><input id="f_followup_fee" type="number"></div>
+      <div class="fld"><label>Currency</label><input id="f_currency"></div>
+      <div class="check"><input type="checkbox" id="f_tax_enabled"> Tax Enabled</div>
+      <div class="fld"><label>Tax Percentage</label><input id="f_tax_percentage" type="number" min="0" max="100"></div>
+      <div class="fld"><label>Receipt Prefix</label><input id="f_receipt_prefix"></div>
+      <div class="fld"><label>JazzCash Number</label><input id="pay_jazzcash"></div>
+      <div class="fld"><label>EasyPaisa Number</label><input id="pay_easypaisa"></div>
+    </div>`;
+    case 8: return `<div class="grid2">
+      <div class="fld"><label>Default Language</label><select id="f_default_language"><option value="en">English</option><option value="ur">Urdu</option></select></div>
+      <div class="fld"><label>Timezone</label><input id="f_timezone"></div>
+    </div>`;
+    case 9: return `<div class="grid2">
+      <div class="check"><input type="checkbox" id="fs_ai_enabled" ${fs.ai_enabled!==false?'checked':''}> AI Enabled</div>
+      <div class="check"><input type="checkbox" id="fs_pharmacy_enabled" ${fs.pharmacy_enabled!==false?'checked':''}> Pharmacy Enabled</div>
+      <div class="check"><input type="checkbox" id="fs_lab_enabled" ${fs.lab_enabled!==false?'checked':''}> Lab Enabled</div>
+      <div class="check"><input type="checkbox" id="fs_billing_enabled" ${fs.billing_enabled?'checked':''}> Billing Enabled</div>
+      <div class="fld" style="grid-column:1/-1;margin-top:10px"><label>Subscription Plan (system-managed, read-only)</label><input value="${dzOrg.subscription_plan||'Not set'}" disabled></div>
+    </div>`;
+    default: return "";
+  }
+}
+
+function dzFillForm() {
+  const o = dzOrg, ps = o.prescription_settings||{}, ch = o.clinic_hours||{}, pay = o.payment_settings||{};
+  const set = (id, val) => { const el = document.getElementById(id); if (el) { if (el.type==="checkbox") el.checked = !!val; else el.value = val||""; } };
+  set("f_name",o.name); set("f_short_name",o.short_name); set("f_organization_type",o.organization_type||"clinic");
+  set("f_tagline",o.tagline); set("f_description",o.description);
+  set("f_phone_primary",o.phone_primary); set("f_phone_secondary",o.phone_secondary); set("f_whatsapp",o.whatsapp);
+  set("f_email",o.email); set("f_website",o.website); set("f_emergency_contact",o.emergency_contact);
+  set("f_country",o.country); set("f_province",o.province); set("f_city",o.city); set("f_postal_code",o.postal_code);
+  set("f_address",o.address); set("f_maps_url",o.maps_url);
+  set("f_primary_color",o.primary_color||"#0B5C46"); set("f_secondary_color",o.secondary_color||"#062A20"); set("f_accent_color",o.accent_color||"#15806A");
+  set("f_footer_text",o.footer_text);
+  document.getElementById("preview_logo_url").src = o.logo_url || "../assets/icon-192.png";
+  document.getElementById("preview_prescription_logo_url").src = o.prescription_logo_url || o.logo_url || "../assets/icon-192.png";
+  ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"].forEach(d => set(`f_hours_${d}`, ch[d]));
+  set("f_default_doctor_name",o.default_doctor_name); set("f_default_doctor_qualification",o.default_doctor_qualification);
+  set("f_default_doctor_title",o.default_doctor_title); set("f_default_doctor_registration_number",o.default_doctor_registration_number);
+  set("ps_paper_size", ps.paper_size||"A4"); set("f_prescription_prefix", o.prescription_prefix);
+  set("f_consultation_fee",o.consultation_fee); set("f_followup_fee",o.followup_fee); set("f_currency",o.currency||"PKR");
+  set("f_tax_enabled",o.tax_enabled); set("f_tax_percentage",o.tax_percentage); set("f_receipt_prefix",o.receipt_prefix);
+  set("pay_jazzcash",pay.jazzcash); set("pay_easypaisa",pay.easypaisa);
+  set("f_default_language",o.default_language||"en"); set("f_timezone",o.timezone||"Asia/Karachi");
+  dzDirty = false; document.getElementById("dirtyIndicator").style.display = "none";
+}
+
+function dzResetForm() { dzFillForm(); document.getElementById("saveStatus").textContent = ""; }
+
+async function dzUploadAsset(input, kind, field) {
+  const file = input.files[0];
+  if (!file) return;
+  const status = document.getElementById("saveStatus");
+  status.textContent = "Uploading…";
+  const r = await uploadOrganizationAsset(file, kind);
+  if (!r.ok) { status.innerHTML = `<span style="color:var(--signal-critical)">${r.error}</span>`; return; }
+  document.getElementById(`preview_${field}`).src = r.url;
+  dzOrg[field] = r.url;
+  dzDirty = true; document.getElementById("dirtyIndicator").style.display = "inline";
+  status.innerHTML = `<span style="color:var(--signal-success)">✓ Uploaded — click Save Changes to apply.</span>`;
+}
+
+async function dzSaveOrg() {
+  const status = document.getElementById("saveStatus");
+  const get = (id) => document.getElementById(id)?.value;
+  const getChk = (id) => document.getElementById(id)?.checked;
+
+  if (!get("f_name") || !get("f_phone_primary") || !(get("f_address")||get("f_city")) || !get("f_timezone") || !get("f_currency")) {
+    status.innerHTML = `<span style="color:var(--signal-critical)">Organization Name, Primary Phone, Address/City, Timezone and Currency are required.</span>`;
+    return;
+  }
+  const clinic_hours = {};
+  ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"].forEach(d => clinic_hours[d] = get(`f_hours_${d}`) || "Closed");
+
+  const patch = {
+    name: get("f_name"), short_name: get("f_short_name"), organization_type: get("f_organization_type"),
+    tagline: get("f_tagline"), description: get("f_description"),
+    phone_primary: get("f_phone_primary"), phone_secondary: get("f_phone_secondary"), whatsapp: get("f_whatsapp"),
+    email: get("f_email"), website: get("f_website"), emergency_contact: get("f_emergency_contact"),
+    country: get("f_country"), province: get("f_province"), city: get("f_city"), postal_code: get("f_postal_code"),
+    address: get("f_address"), maps_url: get("f_maps_url"),
+    logo_url: dzOrg.logo_url, prescription_logo_url: dzOrg.prescription_logo_url,
+    primary_color: get("f_primary_color"), secondary_color: get("f_secondary_color"), accent_color: get("f_accent_color"),
+    footer_text: get("f_footer_text"), clinic_hours,
+    default_doctor_name: get("f_default_doctor_name"), default_doctor_qualification: get("f_default_doctor_qualification"),
+    default_doctor_title: get("f_default_doctor_title"), default_doctor_registration_number: get("f_default_doctor_registration_number"),
+    prescription_prefix: get("f_prescription_prefix"),
+    prescription_settings: {
+      show_logo: getChk("ps_show_logo"), show_clinic_name: getChk("ps_show_clinic_name"), show_doctor_name: getChk("ps_show_doctor_name"),
+      show_qualifications: getChk("ps_show_qualifications"), show_contact: getChk("ps_show_contact"), show_address: getChk("ps_show_address"),
+      show_registration_number: getChk("ps_show_registration_number"), show_ai_disclaimer: getChk("ps_show_ai_disclaimer"),
+      compact_mode_default: getChk("ps_compact_mode_default"), urdu_advice_enabled: getChk("ps_urdu_advice_enabled"),
+      paper_size: get("ps_paper_size"),
+    },
+    consultation_fee: get("f_consultation_fee")||null, followup_fee: get("f_followup_fee")||null, currency: get("f_currency"),
+    tax_enabled: getChk("f_tax_enabled"), tax_percentage: get("f_tax_percentage")||0, receipt_prefix: get("f_receipt_prefix"),
+    payment_settings: { jazzcash: get("pay_jazzcash"), easypaisa: get("pay_easypaisa") },
+    default_language: get("f_default_language"), timezone: get("f_timezone"),
+    feature_settings: {
+      ai_enabled: document.getElementById("fs_ai_enabled")?.checked ?? true,
+      pharmacy_enabled: document.getElementById("fs_pharmacy_enabled")?.checked ?? true,
+      lab_enabled: document.getElementById("fs_lab_enabled")?.checked ?? true,
+      billing_enabled: document.getElementById("fs_billing_enabled")?.checked ?? false,
+    },
+  };
+
+  status.textContent = "Saving…";
+  const r = await saveOrganizationSettings(patch);
+  if (!r.ok) { status.innerHTML = `<span style="color:var(--signal-critical)">${r.error}</span>`; return; }
+  dzOrg = r.organization;
+  document.getElementById("lastSaved").textContent = `Last saved: ${new Date(dzOrg.updated_at).toLocaleString()} by you`;
+  status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Saved. All new prescriptions will use these settings.</span>`;
+  dzDirty = false; document.getElementById("dirtyIndicator").style.display = "none";
+}
+
+async function dzShowPreview() {
+  const cfg = await getPrescriptionHeaderConfig();
+  const host = document.getElementById("previewHost");
+  host.innerHTML = `
+    <div style="background:#fff;padding:18px;border:1px solid var(--slate-200);border-radius:10px;margin-top:10px">
+      <div style="text-align:center;border-bottom:2px solid ${dzOrg.primary_color||'#0B5C46'};padding-bottom:8px;margin-bottom:10px">
+        ${cfg.logoUrl?`<img src="${cfg.logoUrl}" style="height:36px;margin-bottom:4px"><br>`:''}
+        ${cfg.settings.show_clinic_name!==false?`<div style="font-size:15px;font-weight:800;color:${dzOrg.primary_color||'#0B5C46'}">${cfg.clinicName}</div>`:''}
+        ${cfg.settings.show_doctor_name!==false?`<div style="font-size:12px;color:var(--slate-500)">${cfg.doctorName||''} ${cfg.settings.show_qualifications!==false?('· '+(cfg.qualification||'')):''}</div>`:''}
+        ${cfg.settings.show_contact!==false?`<div style="font-size:11px;color:var(--slate-500)">${cfg.address||''} · ${cfg.phone||''}</div>`:''}
+      </div>
+      <div style="font-size:11.5px;color:var(--slate-500)">This is a live preview — save to apply to new prescriptions.</div>
+    </div>`;
+}
+</script>
+</body>
+</html>
