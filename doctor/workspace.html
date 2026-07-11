@@ -74,6 +74,10 @@ let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCur
   dzCopilotInit(session.profile);
 
   document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel" id="subApprovalPanel" style="display:none;background:var(--clinical-50);border-color:var(--clinical-100)">
+      <h2 style="font-size:13px">⚠ Pharmacy Substitution Requests — Your Approval Needed</h2>
+      <div id="subApprovalList"></div>
+    </div>
     <div class="wsGrid">
       <div class="dz-panel" style="padding:12px">
         <h2 style="font-size:13px;margin-bottom:8px">Your Queue</h2>
@@ -82,8 +86,37 @@ let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCur
       <div id="dMain">${dzEmptyState("✚","Select a patient","Choose a patient from your queue on the left to begin.")}</div>
     </div>`;
   await dzLoadQueue();
+  await dzLoadSubstitutionApprovals();
   dzStartDoctorPolling();
 })();
+
+/** STEP 7 — pharmacist cannot silently replace a medicine. A substitution
+ *  request sits here until the prescribing doctor approves or rejects it. */
+async function dzLoadSubstitutionApprovals() {
+  const { data } = await window.dzSupabase.from("pharmacy_queue")
+    .select("id, medicine_name, substituted_with, patients(full_name)")
+    .eq("organization_id", dzOrgId).eq("doctor_id", dzDoctorId).eq("substitution_status", "requested");
+  const panel = document.getElementById("subApprovalPanel");
+  const list = document.getElementById("subApprovalList");
+  if (!data || !data.length) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+  list.innerHTML = data.map(r => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--clinical-100);font-size:12.5px">
+      <span><b>${r.patients?.full_name||''}</b>: Pharmacy wants to substitute <b>${r.medicine_name}</b> → <b>${r.substituted_with}</b></span>
+      <span>
+        <button class="ai-btn" style="background:#E6F6EE;color:var(--signal-success)" onclick="dzApproveSubstitution('${r.id}',true)">Approve</button>
+        <button class="ai-btn" style="background:#FDECEC;color:var(--signal-critical)" onclick="dzApproveSubstitution('${r.id}',false)">Reject</button>
+      </span>
+    </div>`).join("");
+}
+async function dzApproveSubstitution(queueId, approved) {
+  await window.dzSupabase.from("pharmacy_queue").update({
+    substitution_status: approved ? "doctor_approved" : "doctor_rejected",
+    substitution_approved_by: dzDoctorId,
+  }).eq("id", queueId);
+  console.log("[Queue Debug] Substitution decision", { queueId, approved });
+  await dzLoadSubstitutionApprovals();
+}
 
 // PART 6 — safe polling refresh (Supabase Realtime publication status for
 // `tokens` is not confirmed - see MANUAL_SETUP_REQUIRED.md for the manual
@@ -91,9 +124,9 @@ let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCur
 let dzDoctorPollHandle = null;
 function dzStartDoctorPolling() {
   if (dzDoctorPollHandle) return;
-  dzDoctorPollHandle = setInterval(() => { if (!document.hidden) dzLoadQueue(); }, 12000);
+  dzDoctorPollHandle = setInterval(() => { if (!document.hidden) { dzLoadQueue(); dzLoadSubstitutionApprovals(); } }, 12000);
 }
-document.addEventListener("visibilitychange", () => { if (!document.hidden) dzLoadQueue(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { dzLoadQueue(); dzLoadSubstitutionApprovals(); } });
 
 async function dzLoadQueue() {
   const host = document.getElementById("dQueue");
@@ -267,7 +300,7 @@ async function dzOpenPatient(i) {
         <div style="font-size:10.5px;color:var(--slate-500);margin-top:6px">Drug-interaction checking is not available — it requires a licensed interaction database, not currently integrated. See DATABASE_CHANGES_REQUIRED.md.</div>
       </div>
 
-      <button class="primary-btn" onclick="dzApprovePrescription()">Approve &amp; Save Prescription</button>
+      <button class="primary-btn" onclick="dzApprovePrescription()">Approve &amp; Send to Pharmacy</button>
       <div id="rxStatus" style="margin-top:10px;font-size:12.5px"></div>
     </div>
 
@@ -649,8 +682,10 @@ async function dzApprovePrescription() {
         await window.dzSupabase.from("pharmacy_queue").insert({
           organization_id: dzOrgId, prescription_id: rx.id, visit_id: dzSelected.visit_id, patient_id: dzSelected.patient_id,
           medicine_name: m.name, dosage: m.dosage, frequency: m.frequency, duration: m.duration, status: "pending",
+          doctor_id: dzDoctorId, priority: "normal", prescribed_qty: 1, token_number: dzSelected.token_number,
         });
       }
+      console.log("[Queue Debug] Pharmacy Queue Created", { prescriptionId: rx.id, medicineCount: meds.length });
     }
     if (followDays) {
       await window.dzSupabase.from("followups").insert({
@@ -659,8 +694,12 @@ async function dzApprovePrescription() {
         reason: diag, status: "scheduled",
       });
     }
-    await window.dzSupabase.from("tokens").update({ status: "doctor_done" }).eq("id", dzSelected.id);
-    status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Prescription approved and routed to pharmacy.</span>`;
+    // STEP 1: visit status -> sent_to_pharmacy (this app's real DB equivalent of
+    // "PHARMACY_PENDING" - verified against the actual tokens_status_check constraint).
+    await window.dzSupabase.from("tokens").update({ status: "sent_to_pharmacy" }).eq("id", dzSelected.id);
+    if (dzSelected.visit_id) await window.dzSupabase.from("visits").update({ status: "sent_to_pharmacy" }).eq("id", dzSelected.visit_id);
+    console.log("[Queue Debug] Prescription Sent", { tokenId: dzSelected.id, visitId: dzSelected.visit_id, status: "sent_to_pharmacy" });
+    status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Prescription sent to Pharmacy.</span>`;
     dzSelected = null;
     document.getElementById("dMain").innerHTML = dzEmptyState("✚","Saved","Select the next patient from the queue.");
     await dzLoadQueue();
