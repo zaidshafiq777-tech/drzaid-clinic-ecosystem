@@ -16,6 +16,7 @@
 <script src="../shared/supabase-client.js"></script>
 <script src="../shared/auth.js"></script>
 <script src="../shared/shell.js"></script>
+<script src="../shared/date-utils.js"></script>
 <script src="../shared/ai-manager.js"></script>
 <script src="../shared/automation-manager.js"></script>
 <script src="../shared/command-bar.js"></script>
@@ -36,17 +37,48 @@
       ${dzCard("Pending Payments","…")}
     </div>
     <div class="dz-panel">
-      <h2>Clinic Operations <span class="dz-badge soon">Milestone 2</span></h2>
-      <div class="sub">Queue board, prescriptions, billing and reports will be migrated into this shell next.</div>
-      ${dzEmptyState("◆","Awaiting live data","This panel will show the live patient flow, revenue and AI ecosystem status once Milestone 2 (Patient Registration &amp; Token Queue) is built into this new shell.")}
+      <h2>Pharmacy Overview <span class="dz-badge live">Live</span></h2>
+      <div class="dz-grid" id="pharmMetrics">${dzCard("Pending Pharmacy","…")}${dzCard("Today's Dispensed","…")}${dzCard("Low Stock Items","…")}${dzCard("Expiring ≤30d","…")}</div>
+      <div id="topMedicinesHost" style="margin-top:10px"></div>
+    </div>
+    <div class="dz-panel">
+      <h2>Clinic Operations <span class="dz-badge soon">Coming soon</span></h2>
+      <div class="sub">Full revenue, staff performance and AI ecosystem status will be added to this shell next.</div>
+      ${dzEmptyState("◆","Awaiting live data","This panel will show full clinic-wide financials once the Billing module is built.")}
     </div>`;
 
   try {
     const orgId = session.profile.organization_id;
-    const today = new Date(); today.setHours(0,0,0,0);
+    const { startUtc, endUtc } = dzGetClinicDayRange("Asia/Karachi");
+    const [{count:pendingPharm}, {count:dispensedToday}, {data:allMeds}, {data:expiringBatches}] = await Promise.all([
+      window.dzSupabase.from("pharmacy_queue").select("id",{count:"exact",head:true}).eq("organization_id",orgId).in("status",["pending","partial"]),
+      window.dzSupabase.from("pharmacy_queue").select("id",{count:"exact",head:true}).eq("organization_id",orgId).eq("status","dispensed").gte("created_at",startUtc).lt("created_at",endUtc),
+      window.dzSupabase.from("medicines").select("id, name, reorder_level, medicine_batches(qty)").eq("organization_id",orgId).eq("is_active",true),
+      window.dzSupabase.from("medicine_batches").select("id").eq("organization_id",orgId).lte("expiry_date", new Date(Date.now()+30*86400000).toISOString().slice(0,10)).gt("qty",0),
+    ]);
+    const lowStockCount = (allMeds||[]).filter(m => (m.medicine_batches||[]).reduce((s,b)=>s+(b.qty||0),0) <= (m.reorder_level||10)).length;
+    document.getElementById("pharmMetrics").innerHTML =
+      dzCard("Pending Pharmacy", pendingPharm ?? 0, "Live") +
+      dzCard("Today's Dispensed", dispensedToday ?? 0, "Live") +
+      dzCard("Low Stock Items", lowStockCount, lowStockCount ? "Needs reorder" : "All above minimum") +
+      dzCard("Expiring ≤30d", (expiringBatches||[]).length, "Batches");
+
+    const since = new Date(); since.setDate(since.getDate()-30);
+    const { data: topData } = await window.dzSupabase.from("stock_ledger").select("change_qty, medicines(name)").eq("organization_id",orgId).eq("reason","dispense").gte("created_at",since.toISOString());
+    const totals = {};
+    (topData||[]).forEach(r => { const n = r.medicines?.name||"Unknown"; totals[n]=(totals[n]||0)+Math.abs(r.change_qty||0); });
+    const top3 = Object.entries(totals).sort((a,b)=>b[1]-a[1]).slice(0,3);
+    document.getElementById("topMedicinesHost").innerHTML = top3.length
+      ? `<div style="font-size:12px;color:var(--slate-500);margin-bottom:4px">Top medicines (30d):</div>` + top3.map(([n,q])=>`<span class="dz-badge live" style="margin-right:6px">${n} (${q})</span>`).join("")
+      : `<div style="font-size:12px;color:var(--slate-500)">No dispensing recorded yet.</div>`;
+  } catch (e) { console.warn("[Owner] pharmacy overview failed", e); }
+
+  try {
+    const orgId = session.profile.organization_id;
+    const { startUtc: todayStart } = dzGetClinicDayRange("Asia/Karachi");
     const [{count:patients}, {count:tokensToday}, {count:staff}, {count:pending}] = await Promise.all([
       window.dzSupabase.from("patients").select("id",{count:"exact",head:true}).eq("organization_id",orgId),
-      window.dzSupabase.from("tokens").select("id",{count:"exact",head:true}).eq("organization_id",orgId).gte("created_at",today.toISOString()),
+      window.dzSupabase.from("tokens").select("id",{count:"exact",head:true}).eq("organization_id",orgId).gte("created_at",todayStart),
       window.dzSupabase.from("profiles").select("id",{count:"exact",head:true}).eq("organization_id",orgId),
       window.dzSupabase.from("bookings").select("id",{count:"exact",head:true}).eq("organization_id",orgId).eq("status","pending_payment"),
     ]);
