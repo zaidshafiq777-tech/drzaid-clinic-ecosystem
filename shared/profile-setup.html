@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Complete Your Profile — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="theme.css">
+<style>
+  body{background:var(--slate-50);min-height:100vh;padding:30px 16px}
+  .wrap{max-width:640px;margin:0 auto}
+  .card{background:#fff;border-radius:var(--radius-lg);box-shadow:var(--shadow-card);padding:28px}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+  .brand img{width:36px;height:36px;border-radius:8px}
+  h1{font-size:19px;margin-bottom:4px}
+  .lede{font-size:13px;color:var(--slate-500);margin-bottom:20px}
+  .section-title{font-size:12px;font-weight:700;color:var(--clinical-700);text-transform:uppercase;letter-spacing:.04em;margin:20px 0 10px;padding-top:14px;border-top:1px solid var(--slate-100)}
+  .section-title:first-of-type{border-top:none;padding-top:0;margin-top:0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .fld label{font-size:11.5px;font-weight:600;color:var(--slate-700);display:block;margin-bottom:4px}
+  .fld input,.fld select,.fld textarea{width:100%;padding:10px 11px;border:1px solid var(--slate-200);border-radius:7px;font-size:13.5px;font-family:inherit;box-sizing:border-box}
+  .submit{width:100%;padding:12px;background:var(--clinical-700);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;margin-top:18px}
+  .submit:disabled{opacity:.6}
+  .notice{padding:12px 14px;border-radius:8px;font-size:13px;margin-bottom:16px}
+  .notice.pending{background:#FFF7E6;color:var(--signal-warning);border:1px solid #F3D9A8}
+  .notice.rejected{background:#FDECEC;color:var(--signal-critical);border:1px solid #F3C6C2}
+  .notice.suspended{background:#FDECEC;color:var(--signal-critical);border:1px solid #F3C6C2}
+  .notice.owner-warn{background:#FFF7E6;color:var(--signal-warning);border:1px solid #F3D9A8;font-size:12px;margin-top:6px}
+  .err{background:#FDECEC;border:1px solid #F3C6C2;color:var(--signal-critical);font-size:12.5px;padding:9px 11px;border-radius:7px;margin-bottom:14px;display:none}
+  .status-badge{display:inline-block;font-size:10.5px;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:uppercase}
+  .status-badge.active{background:#E6F6EE;color:var(--signal-success)}
+  .status-badge.pending{background:#FFF7E6;color:var(--signal-warning)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="brand">
+      <img src="../assets/icon-192.png" alt="">
+      <div><b>Dr. Zaid Healthcare OS</b></div>
+    </div>
+    <h1 id="pageTitle">Complete Your Profile</h1>
+    <div class="lede" id="pageLede">This is required once before you can access your portal.</div>
+    <div id="statusNotice"></div>
+    <div class="err" id="err"></div>
+
+    <form id="profileForm">
+      <div class="section-title">Personal Information</div>
+      <div class="grid">
+        <div class="fld" style="grid-column:1/-1"><label>Full Name *</label><input id="fFullName" required></div>
+        <div class="fld"><label>Phone Number *</label><input id="fPhone" required></div>
+        <div class="fld"><label>Gender</label><select id="fGender"><option value="">Prefer not to say</option><option>Male</option><option>Female</option><option>Other</option></select></div>
+        <div class="fld" style="grid-column:1/-1"><label>Address</label><input id="fAddress"></div>
+      </div>
+
+      <div class="section-title">Professional Information</div>
+      <div class="grid">
+        <div class="fld" style="grid-column:1/-1"><label>Professional Role *</label>
+          <select id="fRole" required></select>
+          <div id="ownerWarn" class="notice owner-warn" style="display:none">This role requires owner approval.</div>
+        </div>
+        <div class="fld"><label>Qualification</label><input id="fQualification" placeholder="e.g. MBBS"></div>
+        <div class="fld"><label>Registration Number</label><input id="fRegNumber"></div>
+        <div class="fld"><label>Department</label><input id="fDepartment"></div>
+        <div class="fld"><label>Organization / Clinic</label><input id="fOrg" value="Dr. Zaid Shafique Clinic" disabled></div>
+      </div>
+
+      <button class="submit" id="submitBtn" type="submit">Submit for Approval</button>
+    </form>
+  </div>
+</div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="supabase-client.js"></script>
+<script src="auth.js"></script>
+<script src="auth-role-service.js"></script>
+<script>
+(async () => {
+  const user = await getCurrentUser();
+  if (!user) { window.location.href = "login.html"; return; }
+
+  // Populate role dropdown from the single shared source.
+  const roleSel = document.getElementById("fRole");
+  roleSel.innerHTML = `<option value="">Select your role</option>` + DZ_ROLE_DROPDOWN.map(r => `<option value="${r.value}">${r.label}</option>`).join("");
+  roleSel.addEventListener("change", () => {
+    document.getElementById("ownerWarn").style.display = roleSel.value === "org_owner" ? "block" : "none";
+  });
+
+  const params = new URLSearchParams(window.location.search);
+  const statusParam = params.get("status");
+  const notice = document.getElementById("statusNotice");
+  if (statusParam === "pending") notice.innerHTML = `<div class="notice pending">Your profile is awaiting approval. The clinic owner will review your requested role shortly. You'll get portal access once approved.</div>`;
+  if (statusParam === "rejected") notice.innerHTML = `<div class="notice rejected">Your profile request was not approved. Contact the clinic owner for details, or submit corrected information below.</div>`;
+  if (statusParam === "suspended") notice.innerHTML = `<div class="notice suspended">Your account has been suspended. Contact the clinic owner to restore access.</div>`;
+
+  const profile = await getCurrentProfile();
+  if (profile) {
+    document.getElementById("fFullName").value = profile.full_name || "";
+    document.getElementById("fPhone").value = profile.phone || "";
+    document.getElementById("fGender").value = profile.gender || "";
+    document.getElementById("fAddress").value = profile.address || "";
+    document.getElementById("fQualification").value = profile.qualification || "";
+    document.getElementById("fRegNumber").value = profile.registration_number || "";
+    document.getElementById("fDepartment").value = profile.department || "";
+    if (profile.requested_role) roleSel.value = profile.requested_role;
+
+    // Already fully active with a role? Nothing to do here - send them home.
+    if (profile.profile_completed && profile.role && profile.status === "active") {
+      window.location.href = getDefaultPortal(profile.role);
+      return;
+    }
+  }
+})();
+
+document.getElementById("profileForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const errBox = document.getElementById("err");
+  const btn = document.getElementById("submitBtn");
+  errBox.style.display = "none";
+  const role = document.getElementById("fRole").value;
+  if (!role) { errBox.textContent = "Please select a professional role."; errBox.style.display = "block"; return; }
+
+  btn.disabled = true; btn.textContent = "Submitting…";
+  try {
+    const user = await getCurrentUser();
+    const { error } = await window.dzSupabase.from("profiles").update({
+      full_name: document.getElementById("fFullName").value.trim(),
+      phone: document.getElementById("fPhone").value.trim(),
+      gender: document.getElementById("fGender").value || null,
+      address: document.getElementById("fAddress").value || null,
+      qualification: document.getElementById("fQualification").value || null,
+      registration_number: document.getElementById("fRegNumber").value || null,
+      department: document.getElementById("fDepartment").value || null,
+      // role is intentionally NOT set here - it only becomes final when the
+      // owner approves (copying requested_role -> role). This is what
+      // actually enforces "normal users cannot self-assign Owner access" -
+      // ALL roles go through the same requested_role -> approval path.
+      requested_role: role,
+      profile_completed: true,
+      status: "pending",
+    }).eq("id", user.id);
+    if (error) throw error;
+    window.location.href = "profile-setup.html?status=pending";
+  } catch (err) {
+    errBox.textContent = err.message || "Could not save your profile. Try again.";
+    errBox.style.display = "block";
+    btn.disabled = false; btn.textContent = "Submit for Approval";
+  }
+});
+</script>
+</body>
+</html>
