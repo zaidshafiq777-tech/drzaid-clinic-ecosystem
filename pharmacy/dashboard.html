@@ -18,10 +18,13 @@
 <script src="../shared/auth.js"></script>
 <script src="../shared/shell.js"></script>
 <script src="../shared/clinical.js"></script>
+<script src="../shared/date-utils.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
 <script src="../shared/ai-manager.js"></script>
 <script src="../shared/automation-manager.js"></script>
 <script src="../shared/command-bar.js"></script>
 <script src="../shared/ai-copilot.js"></script>
+<script src="../shared/pharmacy-agent.js"></script>
 <script>
 (async () => {
   const session = await dzRequireSession(["org_owner","branch_admin","super_admin","pharmacist"]);
@@ -32,12 +35,27 @@
 
   const content = document.getElementById("dz-content");
   content.innerHTML = `<div class="dz-grid" id="metrics">
-      ${dzCard("Pending Dispense","…")}
-      ${dzCard("Medicines In Stock","…")}
+      ${dzCard("Today's Prescriptions","…")}
+      ${dzCard("Waiting Dispense","…")}
+      ${dzCard("Completed Today","…")}
+      ${dzCard("Today's Revenue","…")}
+      ${dzCard("Inventory Value","…")}
     </div>
     <div class="dz-panel">
-      <h2>Dispensing Queue <span class="dz-badge live">Live</span></h2>
+      <h2>Prescription Queue <span class="dz-badge live">Live</span></h2>
+      <div class="sub">Grouped by prescription. Run AI Pharmacy Agent before dispensing to check stock, interactions, allergies and expiry.</div>
       <div id="pharmQueue"></div>
+    </div>
+    <div class="dz-panel">
+      <h2>Reports</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <button class="ai-btn" style="background:var(--slate-100)" onclick="dzLoadLowStock()">Low Stock</button>
+        <button class="ai-btn" style="background:var(--slate-100)" onclick="dzLoadExpiring()">Near Expiry (60d)</button>
+        <button class="ai-btn" style="background:var(--slate-100)" onclick="dzLoadExpired()">Expired</button>
+        <button class="ai-btn" style="background:var(--slate-100)" onclick="dzLoadDeadStock()">Dead Stock (60d no movement)</button>
+        <button class="ai-btn" style="background:var(--slate-100)" onclick="dzLoadTopSelling()">Top Selling (30d)</button>
+      </div>
+      <div id="reportsHost"></div>
     </div>
     <div class="dz-panel">
       <div style="display:flex;justify-content:space-between;align-items:center">
@@ -67,9 +85,7 @@
         <div id="addMedicineStatus" style="font-size:12px;margin-top:6px"></div>
       </div>
       <div style="margin-top:12px;display:flex;gap:8px">
-        <input id="medSearchBox" placeholder="Search medicine name…" style="flex:1;padding:8px;border:1px solid var(--slate-200);border-radius:7px" oninput="dzSearchMedicines()">
-        <button class="ai-btn" onclick="dzLoadLowStock()">Low Stock</button>
-        <button class="ai-btn" onclick="dzLoadExpiring()">Expiring Soon</button>
+        <input id="medSearchBox" placeholder="Search medicine name, generic, barcode, or SKU…" style="flex:1;padding:8px;border:1px solid var(--slate-200);border-radius:7px" oninput="dzSearchMedicines()">
       </div>
       <div id="medicineListHost" style="margin-top:10px"></div>
     </div>`;
@@ -151,8 +167,8 @@ function dzSearchMedicines() {
     const q = document.getElementById("medSearchBox").value.trim();
     const host = document.getElementById("medicineListHost");
     const orgId = window.DZ_SESSION.profile.organization_id;
-    let query = window.dzSupabase.from("medicines").select("id, name, brand_name, form, strength, reorder_level, medicine_batches(qty, expiry_date)").eq("organization_id", orgId);
-    if (q) query = query.ilike("name", `%${q}%`);
+    let query = window.dzSupabase.from("medicines").select("id, name, generic_name, brand_name, barcode, sku, form, strength, reorder_level, medicine_batches(qty, expiry_date)").eq("organization_id", orgId);
+    if (q) query = query.or(`name.ilike.%${q}%,generic_name.ilike.%${q}%,barcode.ilike.%${q}%,sku.ilike.%${q}%`);
     const { data, error } = await query.limit(30);
     if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
     if (!data || !data.length) { host.innerHTML = dzEmptyState("💊","No medicines found","Add your first medicine above."); return; }
@@ -160,7 +176,7 @@ function dzSearchMedicines() {
       const totalQty = (m.medicine_batches||[]).reduce((s,b)=>s+(b.qty||0),0);
       const low = totalQty <= (m.reorder_level||10);
       return `<div style="border:1px solid var(--slate-200);border-radius:7px;padding:8px 12px;margin-bottom:5px;display:flex;justify-content:space-between;font-size:12.5px">
-        <span><b>${m.name}</b> ${m.form||''} ${m.strength||''} ${m.brand_name?'('+m.brand_name+')':''}</span>
+        <span><b>${m.name}</b> ${m.form||''} ${m.strength||''} ${m.brand_name?'('+m.brand_name+')':''} ${m.generic_name?'<span style="color:var(--slate-500)">— '+m.generic_name+'</span>':''}</span>
         <span style="${low?'color:var(--signal-critical);font-weight:700':''}">Stock: ${totalQty}</span>
       </div>`;
     }).join("");
@@ -168,31 +184,80 @@ function dzSearchMedicines() {
 }
 
 async function dzLoadLowStock() {
-  const host = document.getElementById("medicineListHost");
+  const host = document.getElementById("reportsHost");
+  host.innerHTML = `<div style="font-size:12px;color:var(--slate-500)">Loading…</div>`;
   const orgId = window.DZ_SESSION.profile.organization_id;
-  const { data } = await window.dzSupabase.from("medicines").select("id, name, reorder_level, medicine_batches(qty)").eq("organization_id", orgId);
+  const { data } = await window.dzSupabase.from("medicines").select("id, name, reorder_level, medicine_batches(qty)").eq("organization_id", orgId).eq("is_active", true);
   const low = (data||[]).map(m => ({...m, total: (m.medicine_batches||[]).reduce((s,b)=>s+(b.qty||0),0)})).filter(m => m.total <= (m.reorder_level||10));
   host.innerHTML = low.length ? low.map(m => `<div style="border-left:3px solid var(--signal-critical);padding:6px 10px;margin-bottom:4px;font-size:12.5px">${m.name} — ${m.total} left (min ${m.reorder_level||10})</div>`).join("") : dzEmptyState("✓","No low-stock items","All medicines are above their minimum stock level.");
 }
 
 async function dzLoadExpiring() {
-  const host = document.getElementById("medicineListHost");
+  const host = document.getElementById("reportsHost");
+  host.innerHTML = `<div style="font-size:12px;color:var(--slate-500)">Loading…</div>`;
   const orgId = window.DZ_SESSION.profile.organization_id;
+  const today = new Date().toISOString().slice(0,10);
   const soon = new Date(); soon.setDate(soon.getDate()+60);
-  const { data } = await window.dzSupabase.from("medicine_batches").select("batch_no, expiry_date, qty, medicines(name)").eq("organization_id", orgId).lte("expiry_date", soon.toISOString().slice(0,10)).gt("qty", 0);
+  const { data } = await window.dzSupabase.from("medicine_batches").select("batch_no, expiry_date, qty, medicines(name)").eq("organization_id", orgId).lte("expiry_date", soon.toISOString().slice(0,10)).gt("expiry_date", today).gt("qty", 0);
   host.innerHTML = (data&&data.length) ? data.map(b => `<div style="border-left:3px solid var(--signal-warning);padding:6px 10px;margin-bottom:4px;font-size:12.5px">${b.medicines?.name||'?'} — batch ${b.batch_no||'-'} — expires ${b.expiry_date} — qty ${b.qty}</div>`).join("") : dzEmptyState("✓","Nothing expiring soon","No batches expiring within 60 days.");
+}
+
+async function dzLoadExpired() {
+  const host = document.getElementById("reportsHost");
+  host.innerHTML = `<div style="font-size:12px;color:var(--slate-500)">Loading…</div>`;
+  const orgId = window.DZ_SESSION.profile.organization_id;
+  const today = new Date().toISOString().slice(0,10);
+  const { data } = await window.dzSupabase.from("medicine_batches").select("batch_no, expiry_date, qty, medicines(name)").eq("organization_id", orgId).lt("expiry_date", today).gt("qty", 0);
+  host.innerHTML = (data&&data.length) ? data.map(b => `<div style="border-left:3px solid var(--signal-critical);padding:6px 10px;margin-bottom:4px;font-size:12.5px">${b.medicines?.name||'?'} — batch ${b.batch_no||'-'} — <b>expired ${b.expiry_date}</b> — qty ${b.qty} (remove from sale, do not dispense)</div>`).join("") : dzEmptyState("✓","No expired stock","Nothing has passed its expiry date.");
+}
+
+async function dzLoadDeadStock() {
+  const host = document.getElementById("reportsHost");
+  host.innerHTML = `<div style="font-size:12px;color:var(--slate-500)">Checking last 60 days of dispensing…</div>`;
+  const orgId = window.DZ_SESSION.profile.organization_id;
+  const since = new Date(); since.setDate(since.getDate()-60);
+  const [{ data: allMeds }, { data: recentMoves }] = await Promise.all([
+    window.dzSupabase.from("medicines").select("id, name, medicine_batches(qty)").eq("organization_id", orgId).eq("is_active", true),
+    window.dzSupabase.from("stock_ledger").select("medicine_id").eq("organization_id", orgId).gte("created_at", since.toISOString()).eq("reason", "dispense"),
+  ]);
+  const movedIds = new Set((recentMoves||[]).map(r => r.medicine_id));
+  const dead = (allMeds||[]).map(m => ({...m, total:(m.medicine_batches||[]).reduce((s,b)=>s+(b.qty||0),0)})).filter(m => !movedIds.has(m.id) && m.total > 0);
+  host.innerHTML = dead.length ? dead.map(m => `<div style="border-left:3px solid var(--slate-500);padding:6px 10px;margin-bottom:4px;font-size:12.5px">${m.name} — ${m.total} in stock, no dispense recorded in 60 days</div>`).join("") : dzEmptyState("✓","No dead stock detected","Every in-stock medicine has moved in the last 60 days (or none have stock).");
+}
+
+async function dzLoadTopSelling() {
+  const host = document.getElementById("reportsHost");
+  host.innerHTML = `<div style="font-size:12px;color:var(--slate-500)">Loading…</div>`;
+  const orgId = window.DZ_SESSION.profile.organization_id;
+  const since = new Date(); since.setDate(since.getDate()-30);
+  const { data } = await window.dzSupabase.from("stock_ledger").select("medicine_id, change_qty, medicines(name)").eq("organization_id", orgId).eq("reason", "dispense").gte("created_at", since.toISOString());
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("📊","No dispensing recorded yet","Top-selling data will appear once medicines are dispensed via the queue."); return; }
+  const totals = {};
+  data.forEach(r => { const name = r.medicines?.name || "Unknown"; totals[name] = (totals[name]||0) + Math.abs(r.change_qty||0); });
+  const sorted = Object.entries(totals).sort((a,b) => b[1]-a[1]).slice(0,10);
+  host.innerHTML = sorted.map(([name,qty],i) => `<div style="padding:6px 10px;border-bottom:1px solid var(--slate-100);font-size:12.5px">${i+1}. ${name} — ${qty} units (last 30 days)</div>`).join("");
 }
 
 async function dzLoadPharmMetrics() {
   try {
     const orgId = window.DZ_SESSION.profile.organization_id;
-    const [{count:pending}, {count:medicines}] = await Promise.all([
-      window.dzSupabase.from("pharmacy_queue").select("id",{count:"exact",head:true}).eq("organization_id",orgId).eq("status","pending"),
-      window.dzSupabase.from("medicines").select("id",{count:"exact",head:true}).eq("organization_id",orgId),
+    const { startUtc, endUtc } = dzGetClinicDayRange("Asia/Karachi");
+    const [{data:todayRows}, {count:pending}, {data:dispensedToday}, {data:allBatches}] = await Promise.all([
+      window.dzSupabase.from("pharmacy_queue").select("prescription_id").eq("organization_id",orgId).gte("created_at",startUtc).lt("created_at",endUtc),
+      window.dzSupabase.from("pharmacy_queue").select("id",{count:"exact",head:true}).eq("organization_id",orgId).in("status",["pending","partial"]),
+      window.dzSupabase.from("stock_ledger").select("change_qty, medicine_batches(sale_price)").eq("organization_id",orgId).eq("reason","dispense").gte("created_at",startUtc).lt("created_at",endUtc),
+      window.dzSupabase.from("medicine_batches").select("qty, purchase_price").eq("organization_id",orgId),
     ]);
+    const prescriptionsToday = new Set((todayRows||[]).map(r=>r.prescription_id)).size;
+    const completedToday = (todayRows||[]).length ? await window.dzSupabase.from("pharmacy_queue").select("id",{count:"exact",head:true}).eq("organization_id",orgId).eq("status","dispensed").gte("created_at",startUtc).lt("created_at",endUtc) : {count:0};
+    const inventoryValue = (allBatches||[]).reduce((s,b)=>s+(b.qty||0)*(b.purchase_price||0),0);
+    const todayRevenue = (dispensedToday||[]).reduce((s,r)=>s+Math.abs(r.change_qty||0)*(r.medicine_batches?.sale_price||0),0);
     document.getElementById("metrics").innerHTML =
-      dzCard("Pending Dispense", pending ?? 0, "Live") +
-      dzCard("Medicines In Stock", medicines ?? 0, medicines ? "Live" : "No medicines added yet");
+      dzCard("Today's Prescriptions", prescriptionsToday, "Live") +
+      dzCard("Waiting Dispense", pending ?? 0, "Live") +
+      dzCard("Completed Today", completedToday.count ?? 0, "Live") +
+      dzCard("Today's Revenue", "Rs " + Math.round(todayRevenue).toLocaleString(), "Live — from actual dispensed batches") +
+      dzCard("Inventory Value", "Rs " + Math.round(inventoryValue).toLocaleString(), "Live — purchase price basis");
   } catch (e) { console.warn("[Pharmacy] metrics failed", e); }
 }
 
@@ -202,29 +267,80 @@ async function dzLoadPharmQueue() {
   try {
     const orgId = window.DZ_SESSION.profile.organization_id;
     const { data, error } = await window.dzSupabase.from("pharmacy_queue")
-      .select("id, medicine_name, dosage, frequency, duration, status, patients(full_name)")
+      .select("id, prescription_id, patient_id, medicine_name, dosage, frequency, duration, status, priority, created_at, patients(full_name)")
       .eq("organization_id", orgId).in("status", ["pending","partial"])
       .order("created_at", { ascending: true });
     if (error) throw error;
     if (!data || !data.length) { host.innerHTML = dzEmptyState("℞","Queue is empty","Dispensed items appear here once a doctor approves a prescription."); return; }
-    host.innerHTML = data.map(r => `
-      <div style="border:1px solid var(--slate-200);border-radius:8px;padding:10px 14px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-        <div><b>${r.medicine_name}</b> ${r.dosage||''} ${r.frequency||''} ${r.duration||''}<br><span style="font-size:11.5px;color:var(--slate-500)">${r.patients?.full_name||''}</span></div>
-        <div>
-          <button class="ai-btn" style="background:#E6F6EE;color:var(--signal-success)" onclick="dzDispense('${r.id}','dispensed')">Dispense</button>
-          <button class="ai-btn" style="background:#FFF7E6;color:var(--signal-warning)" onclick="dzDispense('${r.id}','partial')">Partial</button>
-          <button class="ai-btn" style="background:#FDECEC;color:var(--signal-critical)" onclick="dzDispense('${r.id}','unavailable')">Unavailable</button>
+
+    // Group by prescription for a cleaner "one card per prescription" view.
+    const byRx = new Map();
+    data.forEach(r => { if (!byRx.has(r.prescription_id)) byRx.set(r.prescription_id, []); byRx.get(r.prescription_id).push(r); });
+
+    host.innerHTML = [...byRx.entries()].map(([rxId, items]) => `
+      <div style="border:1px solid var(--slate-200);border-radius:8px;padding:12px;margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div><b>${items[0].patients?.full_name||'Unknown patient'}</b> <span style="font-size:11px;color:var(--slate-500)">· ${new Date(items[0].created_at).toLocaleTimeString()} · ${items.length} medicine(s)</span></div>
+          <button class="ai-btn" style="background:var(--clinical-100);color:var(--clinical-700)" onclick="dzRunAgentForRx('${rxId}','${items[0].patient_id}')">🤖 AI Pharmacy Agent</button>
         </div>
+        <div id="agentWarnings-${rxId}"></div>
+        ${items.map(r => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--slate-100);flex-wrap:wrap;gap:6px">
+            <div style="font-size:12.5px"><b>${r.medicine_name}</b> ${r.dosage||''} ${r.frequency||''} ${r.duration||''}</div>
+            <div>
+              <button class="ai-btn" style="background:#E6F6EE;color:var(--signal-success)" onclick="dzDispenseMedicine('${r.id}','dispensed')">Dispense</button>
+              <button class="ai-btn" style="background:#FFF7E6;color:var(--signal-warning)" onclick="dzDispenseMedicine('${r.id}','partial')">Partial</button>
+              <button class="ai-btn" style="background:var(--slate-100)" onclick="dzDispensePrompt('${r.id}','substitute')">Substitute</button>
+              <button class="ai-btn" style="background:var(--slate-100)" onclick="dzDispenseMedicine('${r.id}','hold')">Hold</button>
+              <button class="ai-btn" style="background:#FDECEC;color:var(--signal-critical)" onclick="dzDispenseMedicine('${r.id}','unavailable')">Unavailable</button>
+            </div>
+          </div>`).join("")}
       </div>`).join("");
   } catch (e) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">${e.message}</div>`; }
 }
 
-async function dzDispense(id, action) {
+/** Real AI Pharmacy Agent run - Observe/Think/Recommend against real data. Suggests only, never auto-changes anything. */
+async function dzRunAgentForRx(prescriptionId, patientId) {
+  const host = document.getElementById(`agentWarnings-${prescriptionId}`);
+  host.innerHTML = `<div style="font-size:11.5px;color:var(--slate-500);margin:6px 0">Analyzing…</div>`;
+  const orgId = window.DZ_SESSION.profile.organization_id;
+  const context = await dzPharmacyObserve(prescriptionId, patientId, orgId);
+  const { warnings } = await dzRunPharmacyAgent(context, orgId);
+  if (!warnings.length) { host.innerHTML = `<div class="warnBar" style="background:#E6F6EE;color:var(--signal-success);padding:6px 10px;border-radius:6px;font-size:11.5px;margin:6px 0">✓ No concerns found.</div>`; return; }
+  host.innerHTML = warnings.map(w => `<div class="warnBar" style="background:${w.level==='critical'?'#FDECEC':w.level==='warning'?'#FFF7E6':'#E8F1FB'};color:${w.level==='critical'?'var(--signal-critical)':w.level==='warning'?'var(--signal-warning)':'var(--signal-info)'};padding:6px 10px;border-radius:6px;font-size:11.5px;margin:4px 0"><b>${w.medicine!=='-'?w.medicine+': ':''}</b>${dzEsc(w.text)}</div>`).join("");
+}
+
+/** Real dispense - deducts actual stock (FEFO: earliest-expiring batch first) and logs to stock_ledger. */
+async function dzDispenseMedicine(queueId, action, qtyOverride) {
   try {
-    await window.dzSupabase.from("pharmacy_queue").update({ status: action }).eq("id", id);
+    const orgId = window.DZ_SESSION.profile.organization_id;
+    const { data: qRow } = await window.dzSupabase.from("pharmacy_queue").select("medicine_name").eq("id", queueId).single();
+    if ((action === "dispensed" || action === "partial") && qRow) {
+      const { data: med } = await window.dzSupabase.from("medicines").select("id, medicine_batches(id, qty, expiry_date)").eq("organization_id", orgId).ilike("name", qRow.medicine_name).limit(1).maybeSingle();
+      if (med) {
+        const batches = (med.medicine_batches||[]).filter(b => b.qty > 0).sort((a,b) => new Date(a.expiry_date||'9999-12-31') - new Date(b.expiry_date||'9999-12-31'));
+        const dispenseQty = qtyOverride || 1;
+        let remaining = dispenseQty;
+        for (const b of batches) {
+          if (remaining <= 0) break;
+          const take = Math.min(b.qty, remaining);
+          await window.dzSupabase.from("medicine_batches").update({ qty: b.qty - take }).eq("id", b.id);
+          await window.dzSupabase.from("stock_ledger").insert({ organization_id: orgId, medicine_id: med.id, batch_id: b.id, change_qty: -take, reason: "dispense", ref_id: queueId, created_by: window.DZ_SESSION.user.id });
+          remaining -= take;
+        }
+      }
+    }
+    await window.dzSupabase.from("pharmacy_queue").update({ status: action }).eq("id", queueId);
     await dzLoadPharmQueue();
     await dzLoadPharmMetrics();
   } catch (e) { alert("Update failed: " + e.message); }
+}
+
+function dzDispensePrompt(queueId, action) {
+  const sub = prompt("Substitute with (medicine name):");
+  if (!sub) return;
+  window.dzSupabase.from("pharmacy_queue").update({ status: "dispensed", substituted_with: sub }).eq("id", queueId)
+    .then(() => { dzLoadPharmQueue(); dzLoadPharmMetrics(); });
 }
 </script>
 <script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("../sw.js").catch(()=>{})})}</script>
