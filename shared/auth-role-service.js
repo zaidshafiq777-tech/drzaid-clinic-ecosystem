@@ -72,6 +72,7 @@ async function ensureProfileExists() {
   if (!profile) {
     const { data: created, error } = await window.dzSupabase.from("profiles").insert({
       id: user.id, email, full_name: user.user_metadata?.full_name || "",
+      organization_id: window.DZ_CONFIG.ORG_ID,
       profile_completed: isOwnerEmail, status: isOwnerEmail ? "active" : "pending",
       role: isOwnerEmail ? "org_owner" : null, is_super_admin: isOwnerEmail,
     }).select("*").single();
