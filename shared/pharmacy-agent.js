@@ -105,3 +105,14 @@ Flag ONLY genuine concerns: known drug-drug interactions between these specific 
 
   return { warnings, stockInfo };
 }
+
+/** Real AI-generated Dispensing Summary paragraph, built from the actual
+ *  warnings just computed (never invents findings beyond what was found). */
+async function dzGenerateDispensingSummary(context, warnings) {
+  const medList = context.items.map(i => i.medicine_name).join(", ") || "no medicines";
+  const critical = warnings.filter(w => w.level === "critical").map(w => w.text);
+  const warn = warnings.filter(w => w.level === "warning").map(w => w.text);
+  const prompt = `Write a short 2-4 sentence dispensing summary for a pharmacist, in the style of: "Prescription verified. No severe interaction detected. One medicine has low stock. Doctor review not required." Medicines: ${medList}. Critical findings: ${critical.length ? critical.join("; ") : "none"}. Warnings: ${warn.length ? warn.join("; ") : "none"}. Only state what is listed above - do not invent anything. If there are critical findings, end with "Doctor review recommended before dispensing." If none, end with "Doctor review not required." Plain text only.`;
+  const r = await AI.ask(prompt, { temperature: 0 });
+  return r.ok ? r.text.trim() : `Prescription received (${context.items.length} medicine(s)). AI summary unavailable right now - review warnings below manually.`;
+}
