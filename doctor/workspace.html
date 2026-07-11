@@ -60,6 +60,7 @@
 <script src="../shared/visit-status.js?v=20260710c"></script>
 <script src="../shared/prescription-safety.js?v=20260710c"></script>
 <script src="../shared/prescription-renderer.js?v=20260710c"></script>
+<script src="../shared/organization-settings-service.js"></script>
 <script src="../shared/report-vision-uploader.js?v=20260710c"></script>
 <script src="../shared/report-analyzer.js?v=20260710c"></script>
 <script>
@@ -625,7 +626,8 @@ async function dzAnalyzeTranscript(isRegenerate) {
     const warnings = dzRunSafetyChecks(r.data, context);
     document.getElementById("rxWarnings").innerHTML = warnings.map(w => `<div class="warnBar ${w.level}">${dzEsc(w.text)}</div>`).join("");
 
-    document.getElementById("rxPreviewHost").innerHTML = dzRenderPrescriptionPreview(r.data, dzSelected.patients, { id: dzSelected.visit_id });
+    const headerConfig = await getPrescriptionHeaderConfig();
+    document.getElementById("rxPreviewHost").innerHTML = dzRenderPrescriptionPreview(r.data, dzSelected.patients, { id: dzSelected.visit_id }, headerConfig);
     document.getElementById("rxPreviewActions").style.display = "block";
 
     analyzeStatus.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Draft generated — review the form on the left, edit anything, then Approve &amp; Save.</span>`;
@@ -657,6 +659,11 @@ async function dzApprovePrescription() {
   status.textContent = "Saving…";
   try {
     const followDays = parseInt(document.getElementById("pFollowup").value, 10);
+    // Snapshot the header config AT SAVE TIME - so if the clinic changes its
+    // name/logo/doctor details later, this prescription's printed header
+    // never silently changes (per spec: old prescriptions retain their
+    // historical header).
+    const headerSnapshot = await getPrescriptionHeaderConfig();
     const { data: rx, error: rErr } = await window.dzSupabase.from("prescriptions").insert({
       organization_id: dzOrgId, visit_id: dzSelected.visit_id, patient_id: dzSelected.patient_id, doctor_id: dzDoctorId,
       complaints: document.getElementById("pComplaints").value || null,
@@ -668,6 +675,7 @@ async function dzApprovePrescription() {
       referral: document.getElementById("pReferral").value || null,
       follow_up_date: followDays ? new Date(Date.now()+followDays*86400000).toISOString().slice(0,10) : null,
       approved: true, approved_at: new Date().toISOString(),
+      header_snapshot: headerSnapshot,
     }).select("id").single();
     if (rErr) throw rErr;
 
