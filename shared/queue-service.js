@@ -24,7 +24,7 @@ async function dzLoadQueueService(orgId, { onlyToday = true, statusFilter = null
 
   // STEP 1: tokens, no nested relations at all.
   let tokenQuery = window.dzSupabase.from("tokens")
-    .select("id, organization_id, patient_id, visit_id, token_number, status, source, priority, payment_status, created_at, updated_at")
+    .select("id, organization_id, patient_id, visit_id, token_number, status, source, priority, payment_status, created_at")
     .eq("organization_id", orgId);
   if (onlyToday) {
     const { startUtc, endUtc } = dzGetClinicDayRange("Asia/Karachi");
@@ -72,7 +72,7 @@ async function dzLoadQueueService(orgId, { onlyToday = true, statusFilter = null
     return {
       tokenId: t.id, visitId: t.visit_id, patientId: t.patient_id,
       tokenNumber: t.token_number, status: t.status, paymentStatus: t.payment_status,
-      source: t.source, priority: t.priority || "normal", createdAt: t.created_at, updatedAt: t.updated_at,
+      source: t.source, priority: t.priority || "normal", createdAt: t.created_at,
       patient: patient ? {
         id: patient.id, fullName: patient.full_name, age: patient.age,
         gender: patient.gender, phone: patient.phone, emrNumber: patient.emr_number,
