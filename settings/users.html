@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Users &amp; Roles — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:11px;text-transform:uppercase;padding:8px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:8px 6px;border-bottom:1px solid var(--slate-100);vertical-align:top}
+  .st{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase}
+  .st.pending{background:#FFF7E6;color:var(--signal-warning)}
+  .st.active{background:#E6F6EE;color:var(--signal-success)}
+  .st.rejected,.st.suspended{background:#FDECEC;color:var(--signal-critical)}
+  .btn{padding:5px 10px;border:none;border-radius:6px;font-size:11px;font-weight:700;margin-right:4px;margin-bottom:2px}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null;
+(async () => {
+  const session = await requireRole(["org_owner","branch_admin","super_admin"]);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "settings", title: "Users & Roles", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <h2>Staff Accounts <span class="dz-badge live">Live</span></h2>
+      <div class="sub">Only the owner can approve accounts, change roles, or suspend access.</div>
+      <div id="usersTable"></div>
+    </div>`;
+  await dzLoadUsers();
+})();
+
+async function dzLoadUsers() {
+  const host = document.getElementById("usersTable");
+  host.innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">Loading…</div>`;
+  const { data, error } = await window.dzSupabase.from("profiles")
+    .select("id, full_name, email, phone, role, requested_role, status, is_super_admin, created_at")
+    .eq("organization_id", dzOrgId).order("created_at", { ascending: false });
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("👥","No staff accounts yet",""); return; }
+
+  host.innerHTML = `<table>
+    <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Requested</th><th>Current Role</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
+    <tbody>${data.map(u => `
+      <tr>
+        <td><b>${dzEsc(u.full_name)||'-'}</b>${u.is_super_admin?' <span style="color:var(--clinical-700)">★ Owner</span>':''}</td>
+        <td>${dzEsc(u.email)||'-'}</td>
+        <td>${dzEsc(u.phone)||'-'}</td>
+        <td>${u.requested_role ? dzRoleLabel(u.requested_role) : '-'}</td>
+        <td>${u.role ? dzRoleLabel(u.role) : '<span style="color:var(--slate-500)">Not assigned</span>'}</td>
+        <td><span class="st ${u.status}">${u.status}</span></td>
+        <td>${new Date(u.created_at).toLocaleDateString()}</td>
+        <td>${dzUserActions(u)}</td>
+      </tr>`).join("")}</tbody>
+  </table>`;
+}
+
+function dzUserActions(u) {
+  if (u.is_super_admin) return `<span style="font-size:11px;color:var(--slate-500)">Owner account</span>`;
+  let html = "";
+  if (u.status === "pending") {
+    html += `<button class="btn" style="background:#E6F6EE;color:var(--signal-success)" onclick="dzApproveUser('${u.id}','${u.requested_role||''}')">Approve</button>`;
+    html += `<button class="btn" style="background:#FDECEC;color:var(--signal-critical)" onclick="dzRejectUser('${u.id}')">Reject</button>`;
+  }
+  if (u.status === "active") {
+    html += `<button class="btn" style="background:#FDECEC;color:var(--signal-critical)" onclick="dzSuspendUser('${u.id}')">Suspend</button>`;
+    html += `<button class="btn" style="background:var(--slate-100)" onclick="dzChangeRole('${u.id}')">Change Role</button>`;
+  }
+  if (u.status === "suspended" || u.status === "rejected") {
+    html += `<button class="btn" style="background:#E6F6EE;color:var(--signal-success)" onclick="dzReactivateUser('${u.id}','${u.role||u.requested_role||''}')">Reactivate</button>`;
+  }
+  return html;
+}
+
+async function dzApproveUser(id, requestedRole) {
+  if (!requestedRole) { alert("This user has no requested role on file."); return; }
+  const me = await getCurrentUser();
+  await window.dzSupabase.from("profiles").update({
+    role: requestedRole, status: "active", approved_by: me.id, approved_at: new Date().toISOString(),
+  }).eq("id", id);
+  await dzLoadUsers();
+}
+async function dzRejectUser(id) {
+  await window.dzSupabase.from("profiles").update({ status: "rejected" }).eq("id", id);
+  await dzLoadUsers();
+}
+async function dzSuspendUser(id) {
+  if (!confirm("Suspend this user? They will immediately lose portal access.")) return;
+  await window.dzSupabase.from("profiles").update({ status: "suspended" }).eq("id", id);
+  await dzLoadUsers();
+}
+async function dzReactivateUser(id, role) {
+  await window.dzSupabase.from("profiles").update({ status: "active", role: role || null }).eq("id", id);
+  await dzLoadUsers();
+}
+async function dzChangeRole(id) {
+  const options = DZ_ROLE_DROPDOWN.map(r => r.value + " (" + r.label + ")").join("\n");
+  const newRole = prompt("Enter new role value exactly:\n" + options);
+  if (!newRole) return;
+  if (!DZ_ROLE_DROPDOWN.some(r => r.value === newRole)) { alert("Not a recognized role value."); return; }
+  await window.dzSupabase.from("profiles").update({ role: newRole }).eq("id", id);
+  await dzLoadUsers();
+}
+</script>
+</body>
+</html>
