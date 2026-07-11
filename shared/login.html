@@ -66,6 +66,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 <script src="supabase-client.js?v=20260710c"></script>
 <script src="auth.js?v=20260710c"></script>
+<script src="auth-role-service.js?v=20260712"></script>
 <script>
 function dzToggleEye(){
   const p = document.getElementById('pw');
@@ -87,23 +88,32 @@ async function dzSignInWithGoogle() {
 }
 
 // If already signed in (including just after a Google OAuth redirect back to
-// this page), resolve their staff role and go straight to the right dashboard.
+// this page), resolve their profile status and go to the right place.
 (async () => {
   const { data: { session } } = await window.dzSupabase.auth.getSession();
-  if (session) {
-    const { data: profile } = await window.dzSupabase.from('profiles').select('role').eq('id', session.user.id).single();
-    if (profile) {
-      window.location.href = DZ_ROLE_HOME[profile.role] || 'login.html';
-    } else {
-      // Signed in (e.g. via Google) but no staff profile exists for this account yet -
-      // don't leave them silently stuck on a blank login page.
-      const errBox = document.getElementById('err');
-      errBox.textContent = `Signed in as ${session.user.email}, but this account isn't linked to a staff profile yet. Contact the clinic owner to be added.`;
-      errBox.style.display = 'block';
-      await window.dzSupabase.auth.signOut();
-    }
-  }
+  if (session) await dzRouteAfterAuth();
 })();
+
+/** Single place that decides where a signed-in user goes: profile setup
+ *  (missing/incomplete/pending/rejected/suspended) or their portal home. */
+async function dzRouteAfterAuth() {
+  const profile = await ensureProfileExists();
+  if (!profile) {
+    const errBox = document.getElementById('err');
+    errBox.textContent = 'Could not load your profile. Check your connection and try again, or contact the owner.';
+    errBox.style.display = 'block';
+    return;
+  }
+  if (!profile.profile_completed || !profile.role) {
+    window.location.href = profile.status === 'pending' ? 'profile-setup.html?status=pending'
+      : profile.status === 'rejected' ? 'profile-setup.html?status=rejected'
+      : 'profile-setup.html';
+    return;
+  }
+  if (profile.status === 'suspended') { window.location.href = 'profile-setup.html?status=suspended'; return; }
+  if (profile.status === 'pending') { window.location.href = 'profile-setup.html?status=pending'; return; }
+  window.location.href = getDefaultPortal(profile.role);
+}
 
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -114,12 +124,9 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
   errBox.style.display = 'none';
   btn.disabled = true; btn.textContent = 'Signing in…';
   try {
-    const { data, error } = await window.dzSupabase.auth.signInWithPassword({ email, password: pw });
+    const { error } = await window.dzSupabase.auth.signInWithPassword({ email, password: pw });
     if (error) throw error;
-    const { data: profile, error: pErr } = await window.dzSupabase
-      .from('profiles').select('role').eq('id', data.user.id).single();
-    if (pErr || !profile) throw new Error('Could not resolve your role. Contact the owner.');
-    window.location.href = DZ_ROLE_HOME[profile.role] || 'login.html';
+    await dzRouteAfterAuth();
   } catch (err) {
     errBox.textContent = err.message === 'Invalid login credentials'
       ? 'Incorrect email or password.'
