@@ -21,9 +21,10 @@ const DZ_ROLE_LABEL = {
   super_admin: "Super Admin",
   doctor: "Doctor",
   receptionist: "Reception",
-  billing: "Billing",
+  billing: "Accountant",
   pharmacist: "Pharmacist",
-  lab_technician: "Lab Technician",
+  lab_technician: "Lab Staff",
+  nurse: "Nurse / LHV",
 };
 
 /** Require a live session + profile. Redirects to login if missing.
