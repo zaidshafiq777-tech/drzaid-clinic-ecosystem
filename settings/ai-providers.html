@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Providers — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  .provcard{border:1px solid var(--slate-200);border-radius:10px;padding:16px;margin-bottom:12px}
+  .row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .st{font-size:10.5px;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:uppercase}
+  .st.on{background:#E6F6EE;color:var(--signal-success)}
+  .st.off{background:var(--slate-100);color:var(--slate-500)}
+  .st.warn{background:#FFF7E6;color:var(--signal-warning)}
+  .badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:6px;background:var(--clinical-100);color:var(--clinical-700)}
+  .testbtn{font-size:11.5px;font-weight:600;padding:7px 12px;border-radius:7px;border:1px solid var(--slate-200);background:var(--slate-50)}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/ai-manager.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>
+(async () => {
+  const session = await requireRole(["org_owner","branch_admin","super_admin"]);
+  if (!session) return;
+  dzRenderShell({ activeKey: "settings", title: "AI Providers", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <h2>AI Router <span class="dz-badge live">Live</span></h2>
+      <div class="sub">Gemini is primary. Groq activates automatically only for retryable failures (rate limit, timeout, server error) - never for invalid requests or safety blocks.</div>
+      <div class="row" style="margin-top:8px"><span>Automatic Fallback</span><span class="st on">Enabled</span></div>
+      <div class="row"><span>Primary Provider</span><span class="badge">Gemini (gemini-2.5-flash)</span></div>
+      <div class="row"><span>Fallback Provider</span><span class="badge">Groq (openai/gpt-oss-120b)</span></div>
+      <div class="row"><span>Circuit Breaker</span><span style="font-size:12px;color:var(--slate-500)">3 failures / 2min → 5min cooldown</span></div>
+    </div>
+
+    <div class="provcard">
+      <div class="row"><b>Gemini <span class="badge">PRIMARY</span></b><span class="st" id="st-gemini">Not tested</span></div>
+      <div style="font-size:11.5px;color:var(--slate-500)" id="detail-gemini">Key configured server-side in n8n — never exposed here.</div>
+      <button class="testbtn" style="margin-top:8px" onclick="dzTestGemini()">Test Connection</button>
+    </div>
+
+    <div class="provcard">
+      <div class="row"><b>Groq <span class="badge">FALLBACK</span></b><span class="st" id="st-groq">Not tested</span></div>
+      <div style="font-size:11.5px;color:var(--slate-500)" id="detail-groq">Key configured server-side in n8n — never exposed here.</div>
+      <button class="testbtn" style="margin-top:8px" onclick="dzTestGroq()">Test Connection</button>
+    </div>
+
+    <div class="dz-panel">
+      <h2>Recent AI Requests (last 20)</h2>
+      <div class="sub">Metadata only — clinical prompts/content are never logged.</div>
+      <div id="logsHost"></div>
+    </div>
+
+    <div class="dz-panel">
+      <h2>Data Handling Note</h2>
+      <div style="font-size:12.5px;color:var(--slate-700)">For clinical usage, review Groq's Data Retention / Zero Data Retention settings at <a href="https://console.groq.com" target="_blank" style="color:var(--clinical-700)">console.groq.com</a> before relying on fallback for sensitive patient data at scale.</div>
+    </div>`;
+
+  await dzLoadLogs(session.profile.organization_id);
+})();
+
+async function dzTestGemini() {
+  const st = document.getElementById("st-gemini"), det = document.getElementById("detail-gemini");
+  st.textContent = "Testing…"; st.className = "st warn";
+  const r = await AI.testConnection();
+  st.className = "st " + (r.connected ? "on" : "off");
+  st.textContent = r.connected ? "Connected" : "Not Connected";
+  det.textContent = `${r.detail} · ${r.latencyMs}ms`;
+}
+
+async function dzTestGroq() {
+  const st = document.getElementById("st-groq"), det = document.getElementById("detail-groq");
+  st.textContent = "Testing…"; st.className = "st warn";
+  const r = await AI.testGroqDirectly();
+  st.className = "st " + (r.connected ? "on" : "off");
+  st.textContent = r.connected ? "Connected" : "Not Connected";
+  det.textContent = `${r.detail} · ${r.latencyMs}ms`;
+}
+
+async function dzLoadLogs(orgId) {
+  const host = document.getElementById("logsHost");
+  const { data, error } = await window.dzSupabase.from("ai_provider_logs")
+    .select("task_type, provider_used, model_used, fallback_used, fallback_reason, status, created_at")
+    .eq("organization_id", orgId).order("created_at", { ascending: false }).limit(20);
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("📊","No AI requests logged yet","Usage will appear here as staff use AI Copilot, prescriptions, or reports."); return; }
+  host.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr style="text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase"><th style="padding:6px">Time</th><th>Task</th><th>Provider</th><th>Fallback</th><th>Status</th></tr></thead>
+    <tbody>${data.map(l => `<tr style="border-top:1px solid var(--slate-100)">
+      <td style="padding:6px">${new Date(l.created_at).toLocaleString()}</td>
+      <td>${l.task_type||'-'}</td>
+      <td>${l.provider_used||'-'} ${l.model_used?'('+l.model_used+')':''}</td>
+      <td>${l.fallback_used ? `<span style="color:var(--signal-warning)">Yes — ${l.fallback_reason||''}</span>` : 'No'}</td>
+      <td>${l.status==='success'?'<span style="color:var(--signal-success)">✓</span>':'<span style="color:var(--signal-critical)">✕</span>'}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+</script>
+</body>
+</html>
