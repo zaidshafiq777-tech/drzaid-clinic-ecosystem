@@ -18,7 +18,21 @@
 // ============================================================
 
 const AI = {
-  _endpoint: window.DZ_CONFIG.N8N_BASE_URL + "/dz-ai-router",
+  // Switched to a Supabase Edge Function - n8n Cloud's execution quota was
+  // exhausted (verified live, twice) and blocking all AI features. Same
+  // Gemini-primary + Groq-fallback logic, now running server-side here
+  // instead. Requires the signed-in user's session token (stricter than
+  // the old unauthenticated n8n webhook).
+  _endpoint: "https://yjcxhxsxlvrcrsbihbpo.supabase.co/functions/v1/ai-router",
+
+  async _authHeaders() {
+    const { data: { session } } = await window.dzSupabase.auth.getSession();
+    return {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + (session?.access_token || window.DZ_CONFIG.SUPABASE_ANON_KEY),
+      "apikey": window.DZ_CONFIG.SUPABASE_ANON_KEY,
+    };
+  },
 
   /** Ask the AI a question. Returns { ok, text, raw, error, providerUsed,
    *  modelUsed, fallbackUsed, fallbackReason }. Never throws. */
@@ -26,7 +40,7 @@ const AI = {
     try {
       const res = await fetch(this._endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await this._authHeaders(),
         body: JSON.stringify({
           prompt,
           temperature: opts.temperature ?? 0,
@@ -96,7 +110,7 @@ const AI = {
     try {
       const res = await fetch(this._endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await this._authHeaders(),
         body: JSON.stringify({ prompt: "Reply with exactly one word: OK", temperature: 0, forceProvider: "groq" }),
       });
       const http = await dzReadHttpResponse(res);
