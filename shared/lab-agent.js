@@ -6,7 +6,7 @@
 // ============================================================
 
 const DZ_CRITICAL_PATTERNS = [
-  { re: /h(a|ae)?moglobin[:\s]*([\d.]+)/i, check: (v) => v < 6, label: "Critically low hemoglobin" },
+  { re: /h(a|ae)?e?moglobin[:\s]*([\d.]+)/i, check: (v) => v < 6, label: "Critically low hemoglobin" },
   { re: /potassium[:\s]*([\d.]+)/i, check: (v) => v > 6.5 || v < 2.5, label: "Critical potassium level" },
   { re: /sodium[:\s]*([\d.]+)/i, check: (v) => v > 160 || v < 120, label: "Critical sodium level" },
   { re: /platelet[s]?[:\s]*([\d.]+)/i, check: (v) => v < 20, label: "Critically low platelets" },
