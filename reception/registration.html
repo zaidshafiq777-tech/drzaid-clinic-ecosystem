@@ -30,6 +30,7 @@
 <script src="../shared/shell.js?v=20260710c"></script>
 <script src="../shared/clinical.js?v=20260710c"></script>
 <script src="../shared/visit-status.js?v=20260710c"></script>
+<script src="../shared/keyboard-navigation.js"></script>
 <script src="../shared/response-parser.js"></script>
 <script src="../shared/ai-manager.js?v=20260710c"></script>
 <script src="../shared/automation-manager.js?v=20260710c"></script>
@@ -46,11 +47,12 @@ let dzOrgId = null;
   dzCopilotInit(session.profile);
 
   document.getElementById("dz-content").innerHTML = `
+    <div data-dz-keynav="true">
     <div class="dz-panel" id="phoneStep">
       <h2>Step 1 — Phone Number</h2>
-      <div class="sub">Enter the patient's phone number first. We check for an existing record before creating a new one.</div>
+      <div class="sub">Enter the patient's phone number first. We check for an existing record before creating a new one. <span style="color:var(--slate-500)">(Enter = check, Alt+N = focus here)</span></div>
       <div style="display:flex;gap:8px;max-width:420px">
-        <input id="phoneInput" placeholder="03xxxxxxxxx" style="flex:1;padding:11px;border:1px solid var(--slate-200);border-radius:8px;font-size:14px">
+        <input id="phoneInput" placeholder="03xxxxxxxxx" style="flex:1;padding:11px;border:1px solid var(--slate-200);border-radius:8px;font-size:14px" onkeydown="if(event.key==='Enter'){event.preventDefault();dzCheckDuplicate();}">
         <button class="primary-btn" onclick="dzCheckDuplicate()">Check</button>
       </div>
       <div id="dupResults" style="margin-top:14px"></div>
@@ -64,17 +66,28 @@ let dzOrgId = null;
         <div class="fld"><label>Gender</label><select id="fGender"><option value="">Select</option><option>Male</option><option>Female</option><option>Other</option></select></div>
         <div class="fld"><label>Phone *</label><input id="fPhone"></div>
         <div class="fld" style="grid-column:1/-1"><label>Address</label><input id="fAddress"></div>
-        <div class="fld disabled"><label>CNIC</label><input disabled placeholder="Not available yet"><div class="hint">Requires a database migration — see DATABASE_CHANGES_REQUIRED.md</div></div>
-        <div class="fld disabled"><label>Guardian Name</label><input disabled placeholder="Not available yet"><div class="hint">Requires a database migration</div></div>
+        <div class="fld disabled"><label>CNIC</label><input disabled data-dz-skip-nav="true" placeholder="Not available yet"><div class="hint">Requires a database migration — see DATABASE_CHANGES_REQUIRED.md</div></div>
+        <div class="fld disabled"><label>Guardian Name</label><input disabled data-dz-skip-nav="true" placeholder="Not available yet"><div class="hint">Requires a database migration</div></div>
         <div class="fld"><label>Chief Complaint (for this visit) *</label><input id="fComplaint"></div>
         <div class="fld"><label>Visit Type</label><select id="fVisitMode"><option value="in_clinic">In-Clinic</option><option value="online">Online</option></select></div>
       </div>
       <div style="margin-top:16px;display:flex;gap:10px">
-        <button class="primary-btn" id="saveBtn" onclick="dzSaveRegistration()">Save &amp; Create Token</button>
+        <button class="primary-btn" id="saveBtn" onclick="dzSaveRegistration()">Save &amp; Create Token (Ctrl+Enter)</button>
         <button class="ghost-btn" onclick="location.reload()">Cancel</button>
       </div>
       <div id="saveStatus" style="margin-top:10px;font-size:12.5px"></div>
+    </div>
     </div>`;
+
+  dzEnableEnterNavigation(document.querySelector('[data-dz-keynav]'));
+  dzRegisterKeyboardShortcuts({
+    n: () => document.getElementById("phoneInput")?.focus(),
+    q: () => (window.location.href = "dashboard.html"),
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.key === "Enter") { e.preventDefault(); document.getElementById("saveBtn")?.click(); }
+  });
+  document.getElementById("phoneInput").focus();
 })();
 
 let dzMatches = [];
@@ -102,11 +115,13 @@ async function dzCheckDuplicate() {
       dzOpenForm(phone, null);
       return;
     }
-    box.innerHTML = `<div style="font-size:12.5px;font-weight:600;margin-bottom:8px">Possible existing patient(s) found:</div>`;
+    box.innerHTML = `<div style="font-size:12.5px;font-weight:600;margin-bottom:8px">Possible existing patient(s) found: <span style="color:var(--slate-500);font-weight:400">(↑↓ to navigate, Enter to select)</span></div>`;
     dzMatches = data;
+    dzMatchHighlightIndex = 0;
     data.forEach((p, i) => {
       const row = document.createElement("div");
       row.className = "match-card";
+      row.dataset.matchIndex = i;
       row.innerHTML = `<div><b>${p.full_name}</b> &middot; ${p.age || "?"} yrs &middot; ${p.gender || "-"} &middot; ${p.phone}<br><span style="font-size:11px;color:var(--slate-500)">EMR: ${p.emr_number || "—"} &middot; Registered ${new Date(p.created_at).toLocaleDateString()}</span></div>
         <button class="ghost-btn" onclick="dzUseExisting(${i})">Use This Patient</button>`;
       box.appendChild(row);
@@ -117,10 +132,25 @@ async function dzCheckDuplicate() {
     anyway.textContent = "None of these — Create New Patient Anyway";
     anyway.onclick = () => dzOpenForm(phone, null);
     box.appendChild(anyway);
+    dzHighlightMatch(0);
   } catch (e) {
     box.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">Search failed: ${e.message}</div>`;
   }
 }
+
+let dzMatchHighlightIndex = 0;
+function dzHighlightMatch(i) {
+  const cards = document.querySelectorAll(".match-card");
+  cards.forEach((c, idx) => c.style.outline = idx === i ? "2px solid var(--clinical-500)" : "none");
+  dzMatchHighlightIndex = i;
+}
+document.addEventListener("keydown", (e) => {
+  const cards = document.querySelectorAll(".match-card");
+  if (!cards.length) return;
+  if (e.key === "ArrowDown") { e.preventDefault(); dzHighlightMatch(Math.min(dzMatchHighlightIndex + 1, cards.length - 1)); }
+  if (e.key === "ArrowUp") { e.preventDefault(); dzHighlightMatch(Math.max(dzMatchHighlightIndex - 1, 0)); }
+  if (e.key === "Enter" && document.activeElement.id !== "phoneInput" && dzMatches.length) { dzUseExisting(dzMatchHighlightIndex); }
+});
 
 let dzExistingPatient = null;
 function dzUseExisting(i) {
@@ -136,9 +166,11 @@ async function dzOpenForm(phone, existing) {
     document.getElementById("fAge").value = existing.age || "";
     document.getElementById("fGender").value = existing.gender || "";
     document.getElementById("emrPreview").textContent = `Using existing patient — EMR ${existing.emr_number || "—"}`;
+    document.getElementById("fComplaint").focus();
   } else {
     dzExistingPatient = null;
     document.getElementById("emrPreview").textContent = `New patient — EMR number will be auto-assigned by the system when saved (never duplicated).`;
+    document.getElementById("fName").focus();
   }
   document.getElementById("formStep").scrollIntoView({ behavior: "smooth" });
 }
