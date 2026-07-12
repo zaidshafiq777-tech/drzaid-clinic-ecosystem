@@ -10,6 +10,7 @@ const DZ_NAV_ITEMS = [
   { key: "doctor",     label: "Doctor",          href: "../doctor/dashboard.html",    icon: "✚", roles: ["org_owner","branch_admin","super_admin","doctor"] },
   { key: "pharmacy",   label: "Pharmacy",        href: "../pharmacy/dashboard.html",  icon: "℞", roles: ["org_owner","branch_admin","super_admin","pharmacist"] },
   { key: "lab",        label: "Lab",             href: "../lab/dashboard.html",       icon: "⚗", roles: ["org_owner","branch_admin","super_admin","lab_technician"] },
+  { key: "printdesk",  label: "Print Desk",      href: "../print-desk/dashboard.html", icon: "🖨", roles: ["org_owner","branch_admin","super_admin","doctor","receptionist"] },
   { key: "patient",    label: "Patient Portal",  href: "../patient/portal.html",      icon: "⌂", roles: ["org_owner","branch_admin","super_admin","receptionist"] },
   { key: "settings",   label: "Settings",        href: "../settings/settings.html",   icon: "⚙", roles: ["org_owner","branch_admin","super_admin"] },
 ];
