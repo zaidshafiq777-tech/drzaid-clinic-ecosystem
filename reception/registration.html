@@ -30,6 +30,7 @@
 <script src="../shared/shell.js?v=20260710c"></script>
 <script src="../shared/clinical.js?v=20260710c"></script>
 <script src="../shared/visit-status.js?v=20260710c"></script>
+<script src="../shared/event-bus.js"></script>
 <script src="../shared/keyboard-navigation.js"></script>
 <script src="../shared/response-parser.js"></script>
 <script src="../shared/ai-manager.js?v=20260710c"></script>
@@ -239,6 +240,13 @@ async function dzSaveRegistration() {
     }).select("id, token_number").single();
     if (tErr) throw tErr;
     console.log("[Queue Debug] token created", { tokenId: token.id, tokenNumber: token.token_number, status: DZ_STATUS.WAITING_DOCTOR });
+
+    // STEP 2/10 — instant cross-tab notice, so Doctor Workspace (possibly
+    // open in another tab) picks this up within milliseconds via Realtime
+    // AND BroadcastChannel, instead of waiting for its next poll cycle.
+    if (typeof dzBroadcastEvent === "function") {
+      dzBroadcastEvent("token-created", { patientId, visitId: visit.id, tokenId: token.id, organizationId: dzOrgId });
+    }
 
     status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Token #${token.token_number} created for ${name} (EMR: ${assignedEmr || '—'}).</span>
       <br><a href="dashboard.html" style="color:var(--clinical-700);font-weight:600">Back to Reception Queue</a> &middot;
