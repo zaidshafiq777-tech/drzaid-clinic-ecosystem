@@ -18,7 +18,8 @@ function dzCheckVitalsAbnormal(v) {
     const m = String(v.bp).match(/(\d+)\s*\/\s*(\d+)/);
     if (m) {
       const sys = parseInt(m[1], 10), dia = parseInt(m[2], 10);
-      if (sys > 140 || dia > 90) flags.push("High BP (>140/90)");
+      if (sys >= 180 || dia >= 120) flags.push("🚨 CRITICAL BP ALERT (≥180/120)");
+      else if (sys > 140 || dia > 90) flags.push("High BP (>140/90)");
       else if (sys < 90 || dia < 60) flags.push("Low BP (<90/60)");
     }
   }
