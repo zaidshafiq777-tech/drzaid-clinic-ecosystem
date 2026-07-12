@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prescription Print Desk — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase;padding:7px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:7px 6px;border-bottom:1px solid var(--slate-100)}
+  tr.dz-row-selected{background:var(--clinical-50)}
+  .st{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase}
+  .st.waiting_print{background:#FFF7E6;color:var(--signal-warning)}
+  .st.opened,.st.printing{background:#E8F1FB;color:var(--signal-info)}
+  .st.printed{background:#E6F6EE;color:var(--signal-success)}
+  .st.failed,.st.cancelled{background:#FDECEC;color:var(--signal-critical)}
+  .btn{padding:5px 10px;border:none;border-radius:6px;font-size:11px;font-weight:700;margin-right:4px}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null, dzPrintJobs = [], dzSelectedRow = 0;
+(async () => {
+  const session = await dzRequireSession(["org_owner","branch_admin","super_admin","doctor","receptionist"]);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "printdesk", title: "Prescription Print Desk", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">Print Queue <span class="dz-badge live">Live</span></h2>
+        <button class="ghost-refresh" onclick="dzLoadPrintQueue()">Refresh</button>
+      </div>
+      <div class="sub">↑↓ to select · Enter to open · Ctrl+P prints selected job</div>
+      <div id="printQueueHost" style="margin-top:8px"></div>
+    </div>`;
+  await dzLoadPrintQueue();
+  dzStartPrintDeskPolling();
+
+  document.addEventListener("keydown", (e) => {
+    if (!dzPrintJobs.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); dzSelectRow(Math.min(dzSelectedRow+1, dzPrintJobs.length-1)); }
+    if (e.key === "ArrowUp") { e.preventDefault(); dzSelectRow(Math.max(dzSelectedRow-1, 0)); }
+    if (e.key === "Enter" && document.activeElement.tagName !== "INPUT") { dzOpenPrintJob(dzPrintJobs[dzSelectedRow].id); }
+    if (e.ctrlKey && e.key === "p") { e.preventDefault(); dzOpenPrintJob(dzPrintJobs[dzSelectedRow].id); }
+  });
+})();
+
+let dzPrintPollHandle = null;
+function dzStartPrintDeskPolling() {
+  if (dzPrintPollHandle) return;
+  dzPrintPollHandle = setInterval(() => { if (!document.hidden) dzLoadPrintQueue(); }, 10000);
+}
+
+function dzSelectRow(i) {
+  dzSelectedRow = i;
+  document.querySelectorAll("tbody tr").forEach((r, idx) => r.classList.toggle("dz-row-selected", idx === i));
+}
+
+async function dzLoadPrintQueue() {
+  const host = document.getElementById("printQueueHost");
+  const { data, error } = await window.dzSupabase.from("print_jobs")
+    .select("id, status, copies, print_count, created_at, patients(full_name, emr_number), prescription_id, tokens:visit_id(token_number)")
+    .eq("organization_id", dzOrgId).not("status","in.(printed,cancelled)")
+    .order("created_at",{ascending:true});
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">${error.message}</div>`; return; }
+  dzPrintJobs = data || [];
+  if (!dzPrintJobs.length) { host.innerHTML = dzEmptyState("🖨","Print queue is empty","Jobs appear here when a doctor sends a prescription to Print Desk."); return; }
+
+  // Fetch doctor names for display
+  const { data: rxRows } = await window.dzSupabase.from("prescriptions").select("id, doctor_id").in("id", dzPrintJobs.map(j=>j.prescription_id));
+  const doctorByRx = new Map((rxRows||[]).map(r=>[r.id, r.doctor_id]));
+  const doctorIds = [...new Set([...doctorByRx.values()].filter(Boolean))];
+  const { data: docs } = doctorIds.length ? await window.dzSupabase.from("profiles").select("id, full_name").in("id", doctorIds) : {data:[]};
+  const docMap = new Map((docs||[]).map(d=>[d.id,d.full_name]));
+
+  host.innerHTML = `<table><thead><tr>
+    <th>Job#</th><th>Patient</th><th>EMR</th><th>Doctor</th><th>Date/Time</th><th>Status</th><th>Copies</th><th>Actions</th>
+  </tr></thead><tbody>${dzPrintJobs.map((j,i) => `
+    <tr class="${i===0?'dz-row-selected':''}">
+      <td>${j.id.slice(0,8)}</td>
+      <td>${dzEsc(j.patients?.full_name)}</td>
+      <td>${dzEsc(j.patients?.emr_number)||'-'}</td>
+      <td>${dzEsc(docMap.get(doctorByRx.get(j.prescription_id)))||'-'}</td>
+      <td>${new Date(j.created_at).toLocaleString()}</td>
+      <td><span class="st ${j.status}">${j.status.replace(/_/g,' ')}</span></td>
+      <td>${j.print_count}</td>
+      <td>
+        <button class="btn" style="background:var(--clinical-700);color:#fff" onclick="dzOpenPrintJob('${j.id}')">Open</button>
+        ${j.status==='printed'?`<button class="btn" style="background:var(--slate-100)" onclick="dzOpenPrintJob('${j.id}',true)">Reprint</button>`:''}
+        <button class="btn" style="background:#FDECEC;color:var(--signal-critical)" onclick="dzCancelPrintJob('${j.id}')">Cancel</button>
+      </td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+async function dzCancelPrintJob(id) {
+  if (!confirm("Cancel this print job?")) return;
+  await window.dzSupabase.from("print_jobs").update({ status: "cancelled" }).eq("id", id);
+  await dzLoadPrintQueue();
+}
+
+function dzOpenPrintJob(id, reprint) {
+  window.dzSupabase.from("print_jobs").update({ status: "opened" }).eq("id", id).then(() => {});
+  window.open(`view.html?job=${id}${reprint?'&reprint=1':''}`, "_blank");
+}
+</script>
+</body>
+</html>
