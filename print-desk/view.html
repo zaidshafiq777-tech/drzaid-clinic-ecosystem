@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Print Prescription — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  body{background:var(--slate-100);padding:20px}
+  .toolbar{max-width:700px;margin:0 auto 14px;display:flex;justify-content:space-between;align-items:center}
+  .toolbar b{font-size:14px}
+  .wrap{max-width:700px;margin:0 auto}
+  .primary-btn{padding:10px 18px;background:var(--clinical-700);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:13px}
+  .ghost-btn{padding:9px 16px;background:#fff;border:1px solid var(--slate-200);border-radius:8px;font-weight:600;font-size:12.5px}
+  .confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:500}
+  .confirm-box{background:#fff;border-radius:12px;padding:22px;max-width:380px;text-align:center}
+  @media print {
+    body{background:#fff;padding:0}
+    .toolbar, .no-print{display:none !important}
+    .wrap{max-width:100%}
+  }
+</style>
+</head>
+<body>
+  <div class="toolbar no-print">
+    <b>Print Desk — Prescription View</b>
+    <div>
+      <span id="jobStatus" style="font-size:12px;color:var(--slate-500);margin-right:10px"></span>
+      <button class="primary-btn" onclick="dzDoPrint()">🖨 Print Prescription</button>
+      <button class="ghost-btn" onclick="window.close()">Close</button>
+    </div>
+  </div>
+  <div class="wrap" id="rxHost">Loading…</div>
+
+  <div class="confirm-overlay no-print" id="confirmOverlay">
+    <div class="confirm-box">
+      <div style="font-size:15px;font-weight:700;margin-bottom:8px">Was the prescription printed successfully?</div>
+      <button class="primary-btn" onclick="dzConfirmPrinted(true)">Yes, Mark Printed</button>
+      <button class="ghost-btn" style="margin-top:8px" onclick="dzConfirmPrinted(false)">No, Keep Pending</button>
+    </div>
+  </div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/prescription-renderer.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzJobId = null, dzJobRow = null;
+(async () => {
+  const session = await dzRequireSession(["org_owner","branch_admin","super_admin","doctor","receptionist"]);
+  if (!session) return;
+
+  const params = new URLSearchParams(window.location.search);
+  dzJobId = params.get("job");
+  if (!dzJobId) { document.getElementById("rxHost").innerHTML = "No print job specified."; return; }
+
+  const { data: job, error: jErr } = await window.dzSupabase.from("print_jobs").select("*").eq("id", dzJobId).single();
+  if (jErr || !job) { document.getElementById("rxHost").innerHTML = "Print job not found."; return; }
+  dzJobRow = job;
+  document.getElementById("jobStatus").textContent = `Status: ${job.status} · Printed ${job.print_count} time(s)`;
+
+  const [{ data: rx }, { data: items }, { data: patient }] = await Promise.all([
+    window.dzSupabase.from("prescriptions").select("*").eq("id", job.prescription_id).single(),
+    window.dzSupabase.from("prescription_items").select("*").eq("prescription_id", job.prescription_id),
+    window.dzSupabase.from("patients").select("full_name, age, gender, emr_number").eq("id", job.patient_id).single(),
+  ]);
+  if (!rx || !patient) { document.getElementById("rxHost").innerHTML = "Prescription data not found."; return; }
+
+  // Reconstruct the same "draft" shape the renderer expects, from the real
+  // saved prescription row + items - using the SAVED header_snapshot (Part 19)
+  // so this print never reflects a later change to clinic settings.
+  const draft = {
+    chief_complaint: rx.complaints, history: "", examination: rx.examination,
+    vitals_summary: "", reports_summary: "",
+    provisional_diagnosis: rx.diagnosis, differential_diagnosis: (rx.differential_diagnosis||"").split(",").filter(Boolean),
+    medicines: (items||[]).map(i => ({ name: i.medicine_name, strength: "", dose: i.dosage, frequency: i.frequency, duration: i.duration })),
+    investigations: (rx.investigations||"").split(",").filter(Boolean),
+    advice_english: rx.advice, advice_urdu: "", follow_up: rx.follow_up_date || "",
+    referral: rx.referral, one_page_mode: true,
+  };
+  document.getElementById("rxHost").innerHTML = dzRenderPrescriptionPreview(draft, patient, { id: job.visit_id }, rx.header_snapshot);
+})();
+
+function dzDoPrint() {
+  window.print();
+  setTimeout(() => { document.getElementById("confirmOverlay").style.display = "flex"; }, 300);
+}
+
+async function dzConfirmPrinted(printed) {
+  document.getElementById("confirmOverlay").style.display = "none";
+  if (!printed) return;
+  const me = (await window.dzSupabase.auth.getUser()).data.user.id;
+  await window.dzSupabase.from("print_jobs").update({
+    status: "printed", print_count: (dzJobRow.print_count||0) + 1,
+    last_printed_at: new Date().toISOString(), printed_by: me,
+  }).eq("id", dzJobId);
+  document.getElementById("jobStatus").textContent = "Status: printed";
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") window.close();
+  if (e.ctrlKey && e.key === "p") { e.preventDefault(); dzDoPrint(); }
+});
+</script>
+</body>
+</html>
