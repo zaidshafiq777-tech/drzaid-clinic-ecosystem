@@ -129,3 +129,38 @@ async function dzQueueDiagnostics(orgId) {
   byVisit.forEach((ids, visitId) => { if (ids.length > 1) issues.multipleActivePerVisit.push({ visitId, tokenIds: ids }); });
   return issues;
 }
+
+// ============================================================
+// STEP 2/9/10 — Shared post-registration refresh + request versioning
+// ============================================================
+
+/** Call this immediately after Save & Create Token succeeds. It broadcasts
+ *  the event (instant cross-tab notice) AND refreshes whichever queue
+ *  loader functions exist on the CURRENT page (Reception has both; Doctor
+ *  only has its own queue). Never depends on a page reload. */
+async function refreshClinicQueuesAfterRegistration({ patientId, visitId, tokenId, organizationId }) {
+  console.log("[Registration] Refreshing reception list");
+  if (typeof dzLoadQueue === "function") { try { await dzLoadQueue(); } catch (e) { console.warn("[Registration] dzLoadQueue failed", e); } }
+  console.log("[Registration] Refreshing reception queue/metrics");
+  if (typeof dzLoadMetrics === "function") { try { await dzLoadMetrics(); } catch (e) { console.warn("[Registration] dzLoadMetrics failed", e); } }
+  console.log("[Registration] Broadcasting token created", { patientId, visitId, tokenId, organizationId });
+  if (typeof dzBroadcastEvent === "function") {
+    dzBroadcastEvent("token-created", { patientId, visitId, tokenId, organizationId });
+  }
+}
+
+/** STEP 9 — simple per-call-site request versioning helper. Each queue page
+ *  keeps its own counter; wrap a fetch+render pair like:
+ *    const myId = dzNextRequestVersion("reception");
+ *    const data = await fetchQueue();
+ *    if (!dzIsLatestRequest("reception", myId)) return; // stale, discard
+ *    render(data);
+ */
+const _dzRequestVersions = {};
+function dzNextRequestVersion(key) {
+  _dzRequestVersions[key] = (_dzRequestVersions[key] || 0) + 1;
+  return _dzRequestVersions[key];
+}
+function dzIsLatestRequest(key, versionAtCallTime) {
+  return _dzRequestVersions[key] === versionAtCallTime;
+}
