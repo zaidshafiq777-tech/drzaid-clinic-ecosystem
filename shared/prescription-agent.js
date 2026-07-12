@@ -75,19 +75,20 @@ RULES:
 - Return ONLY a raw JSON object, no markdown fences, no preamble, no explanation text before or after. Exact shape:
 ${DZ_RX_SCHEMA_EXAMPLE}`;
 
-  const r = await AI.ask(prompt, { json: true, temperature: 0 });
+  const r = await AI.ask(prompt, { json: true, temperature: 0, taskType: "prescription" });
   if (!r.ok) return { ok: false, error: r.error };
 
-  let text = r.text.replace(/```json|```/g, "").trim();
-  const jStart = text.indexOf("{");
-  const jEnd = text.lastIndexOf("}");
-  if (jStart === -1 || jEnd === -1 || jEnd < jStart) {
-    return { ok: false, error: "AI did not return structured JSON. Try Regenerate, or fill the prescription manually." };
+  // FIX: was using naive "first { to last }" extraction, which breaks on
+  // nested objects/arrays or when the model (especially the Groq fallback
+  // model, which sometimes adds its own reasoning text) wraps the JSON with
+  // extra content. Now uses the same robust, depth-counting parser already
+  // proven for report analysis (shared/response-parser.js) - correctly
+  // balances nested braces and respects string boundaries.
+  let data = dzSafeJsonParse(r.text);
+  if (data !== null) data = dzParseRecursive(data);
+
+  if (data === null) {
+    return { ok: false, error: "AI did not return structured JSON. Try Regenerate, or fill the prescription manually.", _debug: { rawPreview: (r.text||"").slice(0,300), providerUsed: r.providerUsed } };
   }
-  try {
-    const data = JSON.parse(text.slice(jStart, jEnd + 1));
-    return { ok: true, data };
-  } catch (e) {
-    return { ok: false, error: "AI response could not be parsed (" + e.message + "). Try Regenerate." };
-  }
+  return { ok: true, data };
 }
