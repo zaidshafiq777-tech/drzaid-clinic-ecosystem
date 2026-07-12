@@ -14,6 +14,7 @@ const DZ_NAV_COMMANDS = [
   { label: "Open Patient Portal",    go: "../patient/portal.html",      roles: ["org_owner","branch_admin","super_admin","receptionist"] },
   { label: "Open Settings",          go: "../settings/settings.html",   roles: ["org_owner","branch_admin","super_admin"] },
   { label: "Open API & Integrations Status", go: "../settings/api-settings.html", roles: ["org_owner","branch_admin","super_admin"] },
+  { label: "Open Prescription Print Desk", go: "../print-desk/dashboard.html", roles: ["org_owner","branch_admin","super_admin","doctor","receptionist"] },
 ];
 
 let _dzCmdOpen = false;
