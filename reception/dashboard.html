@@ -22,6 +22,8 @@
 <script src="../shared/visit-status.js?v=20260710c"></script>
 <script src="../shared/date-utils.js?v=20260710c"></script>
 <script src="../shared/queue-service.js?v=20260711fix"></script>
+<script src="../shared/event-bus.js"></script>
+<script src="../shared/realtime-service.js"></script>
 <script src="../shared/response-parser.js"></script>
 <script src="../shared/ai-manager.js?v=20260710c"></script>
 <script src="../shared/automation-manager.js?v=20260710c"></script>
@@ -76,10 +78,12 @@ async function dzLoadMetrics() {
 async function dzLoadQueue() {
   const host = document.getElementById("queueTable");
   if (!host) return;
+  const myVersion = dzNextRequestVersion("reception-queue"); // STEP 9 — discard stale results
   host.innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">Loading…</div>`;
   try {
     const orgId = window.DZ_SESSION.profile.organization_id;
     const { rows, debug } = await dzLoadQueueService(orgId, { onlyToday: true });
+    if (!dzIsLatestRequest("reception-queue", myVersion)) { console.log("[Reception] Discarding stale queue response"); return; }
     dzRenderReceptionDebug(debug);
     if (!rows.length) { host.innerHTML = dzEmptyState("▤","No patients yet today","Register a patient to start today's queue."); return; }
     host.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -178,10 +182,19 @@ async function dzTransition(tokenId, visitId, newStatus) {
 let dzReceptionPollHandle = null;
 function dzStartReceptionPolling() {
   if (dzReceptionPollHandle) return;
-  dzReceptionPollHandle = setInterval(() => { if (!document.hidden) { dzLoadQueue(); dzLoadMetrics(); } }, 12000);
+  dzReceptionPollHandle = setInterval(() => { if (!document.hidden) { dzLoadQueue(); dzLoadMetrics(); } }, 10000);
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { dzLoadQueue(); dzLoadMetrics(); } });
 dzStartReceptionPolling();
+
+// STEP 4/10 — instant updates: real Supabase Realtime (tokens is already in
+// the publication; visits was added this milestone) + BroadcastChannel for
+// same-browser cross-tab notice the moment a registration completes.
+dzSubscribeClinicQueue(window.DZ_SESSION.profile.organization_id, () => { dzLoadQueue(); dzLoadMetrics(); });
+dzOnBroadcastEvent("token-created", (detail) => {
+  console.log("[Reception] Instant token-created event received", detail);
+  dzLoadQueue(); dzLoadMetrics();
+});
 
 dzRegisterKeyboardShortcuts({
   n: () => (window.location.href = "registration.html"),
