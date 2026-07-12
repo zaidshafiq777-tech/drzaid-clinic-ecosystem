@@ -2,11 +2,19 @@
 // Dr. Zaid Healthcare OS — Global AI Manager
 // The frontend NEVER calls an AI provider directly and NEVER holds
 // a provider key. Every request goes through the production n8n
-// "DZ Multi-AI Router" (Gemini primary, Groq automatic fallback for
-// retryable failures only). The external AI.ask() interface is
-// UNCHANGED from before - every existing caller (Doctor Copilot,
-// Prescription Generator, Pharmacy AI Agent, Report Summary,
-// AI Copilot) needed zero code changes to get automatic failover.
+// "DZ Multi-AI Router" (Gemini primary, Groq automatic fallback).
+//
+// FIX: previously called response.json() blindly. If n8n returned
+// HTTP 200 with a non-JSON body (e.g. an HTML "execution limit
+// reached" page from n8n's own infrastructure, or any malformed
+// response), res.json() failed silently (.catch(() => null)) and the
+// user saw the confusing "AI service returned 200" message even
+// though the real problem was an unparseable body. Now routes
+// through the same safe text-first parser used for report analysis
+// (shared/response-parser.js), which reads the body as text, tries
+// several normalization strategies (markdown fences, stringified
+// JSON, Gemini/Groq wrappers), and only ever reports a genuine,
+// specific failure reason.
 // ============================================================
 
 const AI = {
@@ -27,16 +35,43 @@ const AI = {
           taskType: opts.taskType || "copilot",
         }),
       });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data) return { ok: false, error: `AI service returned ${res.status}` };
 
-      if (!data.ok) {
-        dzLogAiUsage({ok:false, taskType: opts.taskType, data});
-        return { ok: false, error: data.userMessage || data.primaryError?.message || "AI service unavailable" };
+      const http = await dzReadHttpResponse(res);
+      dzDebugLogAiResponse("ask", http);
+
+      if (!http.ok) {
+        const err = { ok: false, error: dzClassifyHttpFailure(http) };
+        dzLogAiUsage({ ok: false, taskType: opts.taskType, data: null });
+        return err;
       }
-      if (!data.content) return { ok: false, error: "AI returned no content", raw: data };
+      if (!http.rawText || http.rawLength === 0) {
+        dzLogAiUsage({ ok: false, taskType: opts.taskType, data: null });
+        return { ok: false, error: "AI service returned an empty response. Please retry." };
+      }
 
-      dzLogAiUsage({ok:true, taskType: opts.taskType, data});
+      let data = dzSafeJsonParse(http.rawText);
+      if (data !== null) data = dzParseRecursive(data);
+      if (data !== null) data = dzUnwrapGeminiResponse(data);
+      // Also try unwrapping a raw Groq choices[] wrapper, in case anything
+      // ever bypasses the router's own normalization.
+      if (data && typeof data === "object" && Array.isArray(data.choices) && !data.content) {
+        data = { ok: true, content: data.choices[0]?.message?.content || "", providerUsed: "groq", modelUsed: data.model || "" };
+      }
+
+      if (data === null) {
+        dzLogAiUsage({ ok: false, taskType: opts.taskType, data: null });
+        return { ok: false, error: "AI response could not be understood. Please retry." };
+      }
+
+      // Per the standard contract: HTTP 200 is only a real success when
+      // ok !== false AND either content or data is actually present.
+      const hasPayload = !!(data.content || data.data);
+      if (data.ok === false || !hasPayload) {
+        dzLogAiUsage({ ok: false, taskType: opts.taskType, data });
+        return { ok: false, error: data.userMessage || data.primaryError?.message || data.error || "AI service unavailable" };
+      }
+
+      dzLogAiUsage({ ok: true, taskType: opts.taskType, data });
       return {
         ok: true, text: data.content, raw: data,
         providerUsed: data.providerUsed, modelUsed: data.modelUsed,
@@ -64,9 +99,15 @@ const AI = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: "Reply with exactly one word: OK", temperature: 0, forceProvider: "groq" }),
       });
-      const data = await res.json().catch(() => null);
+      const http = await dzReadHttpResponse(res);
+      dzDebugLogAiResponse("testGroqDirectly", http);
       const ms = Math.round(performance.now() - t0);
-      if (!res.ok || !data || !data.ok) return { connected: false, detail: data?.userMessage || `HTTP ${res.status}`, latencyMs: ms };
+      if (!http.ok) return { connected: false, detail: dzClassifyHttpFailure(http), latencyMs: ms };
+      let data = dzSafeJsonParse(http.rawText);
+      if (data !== null) data = dzParseRecursive(data);
+      if (!data || data.ok === false || !data.content) {
+        return { connected: false, detail: data?.userMessage || data?.error || "Groq did not return usable content", latencyMs: ms };
+      }
       return { connected: true, detail: `Responding normally (${data.modelUsed})`, latencyMs: ms };
     } catch (e) {
       return { connected: false, detail: e.message, latencyMs: Math.round(performance.now() - t0) };
@@ -74,10 +115,38 @@ const AI = {
   },
 };
 
+/** Sanitized, specific messages for non-200 responses - never a bare status code alone. */
+function dzClassifyHttpFailure(http) {
+  if (http.status === 404) return "AI router webhook is incorrect or inactive.";
+  if (http.status === 401 || http.status === 403) return "AI router authorization failed.";
+  if (http.status === 429) return "AI service limit has been reached. Please retry shortly.";
+  if ([500, 502, 503, 504].includes(http.status)) return "AI services are temporarily unavailable. Please retry or continue manually.";
+  if (http.status === 200 && http.contentType.includes("text/html")) {
+    // Real, observed case: n8n itself can return an HTML page with HTTP 200
+    // (e.g. its own "execution limit reached" notice) when the workflow
+    // can't run at all - this is an n8n-side issue, not a code bug.
+    return "AI router returned an unexpected page instead of a result - check that the n8n workflow can execute (e.g. execution quota) and is Active.";
+  }
+  return `AI service returned ${http.status}.`;
+}
+
+/** Owner/dev-only debug logging - console only, never shown to normal
+ *  users, never includes the clinical prompt itself. */
+function dzDebugLogAiResponse(callSite, http) {
+  const isOwnerTier = ["org_owner","branch_admin","super_admin"].includes(window.DZ_SESSION?.profile?.role);
+  if (!(isOwnerTier && window.DZ_DEBUG === true)) return;
+  let topLevelKeys = [];
+  try { const p = dzSafeJsonParse ? dzSafeJsonParse(http.rawText) : null; if (p && typeof p === "object") topLevelKeys = Object.keys(p); } catch (e) {}
+  console.log(`[AI Debug] ${callSite}`, {
+    status: http.status, contentType: http.contentType, rawLength: http.rawLength,
+    topLevelKeys, rawPreview: (http.rawText || "").slice(0, 300),
+  });
+}
+
 /** Fire-and-forget telemetry - metadata only, never the clinical prompt/content itself. */
 function dzLogAiUsage({ ok, taskType, data }) {
   try {
-    if (!window.dzSupabase || !window.DZ_SESSION) return; // not signed in yet (e.g. login page test)
+    if (!window.dzSupabase || !window.DZ_SESSION) return;
     window.dzSupabase.from("ai_provider_logs").insert({
       organization_id: window.DZ_SESSION.profile.organization_id,
       user_id: window.DZ_SESSION.user.id,
@@ -91,7 +160,7 @@ function dzLogAiUsage({ ok, taskType, data }) {
       latency_ms: data?.latencyMs || null,
       input_token_count: data?.usage?.inputTokens || null,
       output_token_count: data?.usage?.outputTokens || null,
-    }).then(() => {}, () => {}); // best-effort, never block or throw on log failure
+    }).then(() => {}, () => {});
   } catch (e) { /* never let telemetry break the actual AI response */ }
 }
 
