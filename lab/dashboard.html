@@ -9,6 +9,24 @@
 <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
 <meta name="theme-color" content="#0B5C46">
 <link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase;padding:7px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:7px 6px;border-bottom:1px solid var(--slate-100);vertical-align:top}
+  .st{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase}
+  .st.ordered{background:var(--slate-100);color:var(--slate-500)}
+  .st.sample_pending,.st.pending{background:#FFF7E6;color:var(--signal-warning)}
+  .st.sample_collected,.st.collected{background:#E8F1FB;color:var(--signal-info)}
+  .st.processing{background:#E8F1FB;color:var(--signal-info)}
+  .st.result_ready,.st.completed{background:#E6F6EE;color:var(--signal-success)}
+  .st.doctor_reviewed,.st.verified{background:var(--clinical-100);color:var(--clinical-700)}
+  .st.delivered{background:var(--slate-100);color:var(--slate-500)}
+  .st.cancelled{background:#FDECEC;color:var(--signal-critical)}
+  .btn{padding:5px 10px;border:none;border-radius:6px;font-size:11px;font-weight:700;margin-right:4px;margin-bottom:2px}
+  .critical-badge{background:var(--signal-critical);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:6px;animation:dz-pulse 1.5s infinite}
+  .modal-overlay{position:fixed;inset:0;background:rgba(6,20,15,.5);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px}
+  .modal-box{background:#fff;border-radius:12px;padding:20px;max-width:560px;width:100%;max-height:85vh;overflow-y:auto}
+</style>
 </head>
 <body>
 <div id="dz-shell-root"></div>
@@ -16,42 +34,246 @@
 <script src="../shared/supabase-client.js"></script>
 <script src="../shared/auth.js"></script>
 <script src="../shared/shell.js"></script>
+<script src="../shared/date-utils.js"></script>
+<script src="../shared/response-parser.js"></script>
 <script src="../shared/ai-manager.js"></script>
-<script src="../shared/automation-manager.js"></script>
+<script src="../shared/lab-agent.js"></script>
+<script src="../shared/report-vision-uploader.js"></script>
 <script src="../shared/command-bar.js"></script>
 <script src="../shared/ai-copilot.js"></script>
+<script src="../shared/keyboard-navigation.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
 <script>
+let dzOrgId = null;
 (async () => {
   const session = await dzRequireSession(["org_owner","branch_admin","super_admin","lab_technician"]);
   if (!session) return;
+  dzOrgId = session.profile.organization_id;
   dzRenderShell({ activeKey: "lab", title: "Lab", profile: session.profile });
   dzCommandBarInit(session.profile);
   dzCopilotInit(session.profile);
 
-  const content = document.getElementById("dz-content");
-  content.innerHTML = `<div class="dz-grid" id="metrics">
-      ${dzCard("Pending Tests","…")}
-      ${dzCard("Completed Today","…")}
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-grid" id="labMetrics">
+      ${dzCard("New Orders","…")}${dzCard("Sample Pending","…")}${dzCard("Processing","…")}${dzCard("Result Ready","…")}${dzCard("Delivered Today","…")}
     </div>
     <div class="dz-panel">
-      <h2>Lab Queue &amp; Report Intelligence <span class="dz-badge soon">Milestone 2/3</span></h2>
-      <div class="sub">Pending orders, result entry and AI-assisted report interpretation move into this shell next.</div>
-      ${dzEmptyState("⚗","Awaiting live data","Your lab queue and report tools will appear here in a later milestone.")}
-    </div>`;
-
-  try {
-    const orgId = session.profile.organization_id;
-    const today = new Date(); today.setHours(0,0,0,0);
-    const [{count:pending}, {count:doneToday}] = await Promise.all([
-      window.dzSupabase.from("lab_queue").select("id",{count:"exact",head:true}).eq("organization_id",orgId).in("status",["pending","collected"]),
-      window.dzSupabase.from("lab_queue").select("id",{count:"exact",head:true}).eq("organization_id",orgId).eq("status","completed").gte("created_at",today.toISOString()),
-    ]);
-    document.getElementById("metrics").innerHTML =
-      dzCard("Pending Tests", pending ?? 0, "Live") +
-      dzCard("Completed Today", doneToday ?? 0, "Live");
-  } catch (e) { console.warn("[Lab] metrics failed", e); }
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">Lab Queue <span class="dz-badge live">Live</span></h2>
+        <button class="ghost-refresh" onclick="dzLoadLabQueue()">Refresh</button>
+      </div>
+      <div id="labQueueHost" style="margin-top:10px"></div>
+    </div>
+    <div id="labModalHost"></div>`;
+  await dzLoadLabMetrics();
+  await dzLoadLabQueue();
+  dzStartLabPolling();
 })();
+
+let dzLabPollHandle = null;
+function dzStartLabPolling() {
+  if (dzLabPollHandle) return;
+  dzLabPollHandle = setInterval(() => { if (!document.hidden) { dzLoadLabQueue(); dzLoadLabMetrics(); } }, 12000);
+}
+
+async function dzLoadLabMetrics() {
+  const { startUtc, endUtc } = dzGetClinicDayRange("Asia/Karachi");
+  const [{count:ordered}, {count:pending}, {count:processing}, {count:ready}, {count:delivered}] = await Promise.all([
+    window.dzSupabase.from("lab_queue").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId).eq("status","ordered"),
+    window.dzSupabase.from("lab_queue").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId).in("status",["sample_pending","pending"]),
+    window.dzSupabase.from("lab_queue").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId).eq("status","processing"),
+    window.dzSupabase.from("lab_queue").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId).in("status",["result_ready","completed"]),
+    window.dzSupabase.from("lab_queue").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId).eq("status","delivered").gte("created_at",startUtc).lt("created_at",endUtc),
+  ]);
+  document.getElementById("labMetrics").innerHTML =
+    dzCard("New Orders", ordered??0,"Live") + dzCard("Sample Pending", pending??0,"Live") +
+    dzCard("Processing", processing??0,"Live") + dzCard("Result Ready", ready??0,"Live") + dzCard("Delivered Today", delivered??0,"Live");
+}
+
+async function dzLoadLabQueue() {
+  const host = document.getElementById("labQueueHost");
+  host.innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">Loading…</div>`;
+  const { data, error } = await window.dzSupabase.from("lab_queue")
+    .select("id, order_number, token_number, test_name, status, priority, critical_findings, doctor_reviewed, created_at, patients(full_name, emr_number, age, gender), doctor_id")
+    .eq("organization_id", dzOrgId).not("status","in.(delivered,cancelled)")
+    .order("created_at",{ascending:true});
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12.5px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("🧪","Lab queue is empty","Orders will appear here once a doctor sends a test."); return; }
+
+  const doctorIds = [...new Set(data.map(r=>r.doctor_id).filter(Boolean))];
+  const { data: docs } = doctorIds.length ? await window.dzSupabase.from("profiles").select("id, full_name").in("id", doctorIds) : {data:[]};
+  const docMap = new Map((docs||[]).map(d=>[d.id,d.full_name]));
+
+  host.innerHTML = `<table><thead><tr>
+    <th>Order#</th><th>Token</th><th>Patient</th><th>EMR</th><th>Age/Sex</th><th>Doctor</th><th>Test</th><th>Priority</th><th>Status</th><th>Time</th><th>Actions</th>
+  </tr></thead><tbody>${data.map(r => `
+    <tr>
+      <td>${dzEsc(r.order_number)||'-'}</td>
+      <td>#${r.token_number||'-'}</td>
+      <td>${dzEsc(r.patients?.full_name)}${r.critical_findings?.length?' <span class="critical-badge">CRITICAL</span>':''}</td>
+      <td>${dzEsc(r.patients?.emr_number)||'-'}</td>
+      <td>${r.patients?.age||'?'}/${(r.patients?.gender||'-')[0]}</td>
+      <td>${dzEsc(docMap.get(r.doctor_id))||'-'}</td>
+      <td>${dzEsc(r.test_name)}</td>
+      <td>${dzEsc(r.priority)||'routine'}</td>
+      <td><span class="st ${r.status}">${(r.status||'').replace(/_/g,' ')}</span></td>
+      <td>${new Date(r.created_at).toLocaleTimeString()}</td>
+      <td>${dzLabActions(r)}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+function dzLabActions(r) {
+  const btn = (label, fn, bg, color) => `<button class="btn" style="background:${bg||'var(--slate-100)'};color:${color||'var(--slate-700)'}" onclick="${fn}">${label}</button>`;
+  if (["ordered","pending"].includes(r.status)) {
+    return btn("Collect Sample", `dzOpenSampleCollection('${r.id}')`, "#E8F1FB", "var(--signal-info)");
+  }
+  if (["sample_collected","collected"].includes(r.status)) {
+    return btn("Start Processing", `dzTransitionLab('${r.id}','processing')`);
+  }
+  if (r.status === "processing") {
+    return btn("Enter Result", `dzOpenResultEntry('${r.id}')`, "var(--clinical-700)", "#fff");
+  }
+  if (["result_ready","completed"].includes(r.status)) {
+    return btn("View/Print", `dzOpenResultEntry('${r.id}')`) + btn("Deliver", `dzTransitionLab('${r.id}','delivered')`, "#E6F6EE","var(--signal-success)");
+  }
+  if (["doctor_reviewed","verified"].includes(r.status)) {
+    return btn("View/Print", `dzOpenResultEntry('${r.id}')`) + btn("Deliver", `dzTransitionLab('${r.id}','delivered')`, "#E6F6EE","var(--signal-success)");
+  }
+  return "";
+}
+
+async function dzTransitionLab(id, status) {
+  await window.dzSupabase.from("lab_queue").update({ status, updated_at: new Date().toISOString(), ...(status==='delivered'?{delivered_at:new Date().toISOString(), ready_for_billing:true}:{}) }).eq("id", id);
+  console.log("[Queue Debug] Lab status transitioned", { id, status });
+  await dzLoadLabQueue();
+  await dzLoadLabMetrics();
+}
+
+
+/** PART 9 — Sample Collection */
+function dzOpenSampleCollection(id) {
+  document.getElementById("labModalHost").innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)this.remove()">
+      <div class="modal-box" data-dz-keynav="true">
+        <h2 style="font-size:15px">Sample Collection</h2>
+        <div class="fld" style="margin-bottom:8px"><label style="font-size:11.5px;font-weight:600">Sample Type</label><input id="sc_type" style="width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px"></div>
+        <div class="fld" style="margin-bottom:8px"><label style="font-size:11.5px;font-weight:600">Container</label><input id="sc_container" style="width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px"></div>
+        <div class="fld" style="margin-bottom:8px"><label style="font-size:11.5px;font-weight:600">Sample Quality</label>
+          <select id="sc_quality" style="width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px"><option>Good</option><option>Hemolyzed</option><option>Clotted</option><option>Insufficient</option></select>
+        </div>
+        <div class="fld" style="margin-bottom:8px"><label style="font-size:11.5px;font-weight:600">Remarks</label><textarea id="sc_remarks" rows="2" style="width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px"></textarea></div>
+        <button class="primary-btn" style="padding:9px 16px" onclick="dzSaveSampleCollection('${id}')">Mark Sample Collected</button>
+        <button class="ghost-refresh" onclick="dzRejectSample('${id}')">Reject Sample</button>
+        <button class="ghost-refresh" onclick="document.getElementById('labModalHost').innerHTML=''">Cancel</button>
+      </div>
+    </div>`;
+  dzEnableEnterNavigation(document.querySelector('[data-dz-keynav]'));
+}
+
+async function dzSaveSampleCollection(id) {
+  const me = window.DZ_SESSION.user.id;
+  await window.dzSupabase.from("lab_queue").update({
+    status: "sample_collected", sample_collected_at: new Date().toISOString(), collected_by: me,
+    sample_type: document.getElementById("sc_type").value || null,
+    container: document.getElementById("sc_container").value || null,
+    sample_quality: document.getElementById("sc_quality").value,
+  }).eq("id", id);
+  console.log("[Queue Debug] Sample collected", { id });
+  document.getElementById("labModalHost").innerHTML = "";
+  await dzLoadLabQueue();
+}
+
+async function dzRejectSample(id) {
+  const reason = prompt("Reason for rejecting this sample?");
+  if (!reason) return;
+  await window.dzSupabase.from("lab_queue").update({ status: "sample_pending", rejection_reason: reason }).eq("id", id);
+  document.getElementById("labModalHost").innerHTML = "";
+  await dzLoadLabQueue();
+}
+
+/** PART 10/11 — Result Entry: manual, paste, or upload with AI */
+async function dzOpenResultEntry(id) {
+  const { data: r } = await window.dzSupabase.from("lab_queue").select("*, patients(full_name, emr_number, age, gender)").eq("id", id).single();
+  if (!r) return;
+  document.getElementById("labModalHost").innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)this.remove()">
+      <div class="modal-box" style="max-width:680px" data-dz-keynav="true">
+        <h2 style="font-size:15px">${dzEsc(r.test_name)} — ${dzEsc(r.patients?.full_name)}</h2>
+        <div style="font-size:11.5px;color:var(--slate-500);margin-bottom:10px">EMR ${dzEsc(r.patients?.emr_number)||'-'} · ${r.patients?.age||'?'}y ${dzEsc(r.patients?.gender)||''}</div>
+
+        <div style="font-size:11.5px;font-weight:700;margin-bottom:4px">Paste Report Text</div>
+        <textarea id="re_paste" rows="4" placeholder="Paste result text here…" style="width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px;box-sizing:border-box"></textarea>
+        <button class="ai-btn" style="margin-top:6px" onclick="dzAnalyzeLabText('${id}')">Analyze Pasted Text</button>
+
+        <div style="font-size:11.5px;font-weight:700;margin:12px 0 4px">Or Upload PDF/Image</div>
+        <input type="file" id="re_file" accept=".pdf,image/jpeg,image/jpg,image/png,image/webp">
+        <button class="ai-btn" onclick="dzAnalyzeLabFile('${id}')">Upload &amp; Analyze</button>
+
+        <div id="re_result" style="margin-top:10px"></div>
+        <button class="ghost-refresh" style="margin-top:10px" onclick="document.getElementById('labModalHost').innerHTML=''">Close</button>
+      </div>
+    </div>`;
+  dzEnableEnterNavigation(document.querySelector('[data-dz-keynav]'));
+  if (r.ai_summary) dzRenderLabAnalysis(id, {
+    testName: r.test_name, parameters: r.result_items||[], abnormalFindings: r.abnormal_findings||[],
+    criticalFindings: r.critical_findings||[], cleanSummary: r.ai_summary, confidence: r.ai_confidence||"medium", doctorReviewRequired: true,
+  }, r.raw_extracted_text);
+}
+
+async function dzAnalyzeLabText(id) {
+  const text = document.getElementById("re_paste").value.trim();
+  if (!text) { alert("Paste result text first."); return; }
+  document.getElementById("re_result").innerHTML = `<div style="font-size:12px;color:var(--slate-500)">Analyzing…</div>`;
+  const { data: r } = await window.dzSupabase.from("lab_queue").select("test_name").eq("id", id).single();
+  const analysis = await dzAnalyzeLabResult(r.test_name, text, null);
+  dzRenderLabAnalysis(id, analysis, text);
+}
+
+async function dzAnalyzeLabFile(id) {
+  const f = document.getElementById("re_file").files[0];
+  if (!f) { alert("Choose a file first."); return; }
+  document.getElementById("re_result").innerHTML = `<div style="font-size:12px;color:var(--slate-500)">Extracting with Gemini Vision…</div>`;
+  const { data: r } = await window.dzSupabase.from("lab_queue").select("test_name, patients(full_name, age, gender, emr_number)").eq("id", id).single();
+  const vis = await dzUploadReportForVision(f, r.test_name, { name: r.patients?.full_name, age: r.patients?.age, gender: r.patients?.gender, emr: r.patients?.emr_number });
+  if (!vis.ok) { document.getElementById("re_result").innerHTML = `<div class="warnBar" style="background:#FDECEC;color:var(--signal-critical);padding:8px;border-radius:6px;font-size:12px">${dzEsc(vis.error)}</div>`; return; }
+  const analysis = await dzAnalyzeLabResult(r.test_name, vis.rawExtractedText || vis.cleanSummary || "", null);
+  if (!analysis.cleanSummary || analysis.cleanSummary.includes("unavailable")) analysis.cleanSummary = vis.cleanSummary;
+  if (!analysis.criticalFindings.length) analysis.criticalFindings = vis.redFlags || [];
+  if (!analysis.abnormalFindings.length) analysis.abnormalFindings = vis.keyFindings || [];
+  dzRenderLabAnalysis(id, analysis, vis.rawExtractedText);
+}
+
+function dzRenderLabAnalysis(id, analysis, rawText) {
+  const host = document.getElementById("re_result");
+  host.innerHTML = `
+    <div style="background:var(--slate-50);border-radius:8px;padding:10px;font-size:12px">
+      ${analysis.criticalFindings.length ? `<div class="warnBar" style="background:var(--signal-critical);color:#fff;padding:8px;border-radius:6px;font-weight:700;margin-bottom:6px">🚨 CRITICAL RESULT ALERT: ${analysis.criticalFindings.map(dzEsc).join(", ")}</div>` : ""}
+      <div><b>Summary:</b> ${dzEsc(analysis.cleanSummary)}</div>
+      ${analysis.abnormalFindings.length ? `<div style="margin-top:4px"><b>Abnormal:</b> ${analysis.abnormalFindings.map(dzEsc).join(", ")}</div>` : ""}
+      <div style="font-size:11px;color:var(--slate-500);margin-top:4px">Confidence: ${dzEsc(analysis.confidence)} · Doctor review required before finalizing.</div>
+      <label style="display:block;margin-top:8px;font-size:11.5px"><input type="checkbox" id="re_confirm" checked> I confirm these values are correct</label>
+      <button class="primary-btn" style="margin-top:6px;padding:8px 14px" onclick='dzSaveLabResult("${id}", ${JSON.stringify(analysis).replace(/'/g,"&apos;")})'>Save Result</button>
+    </div>`;
+  window._dzPendingLabRaw = rawText;
+}
+
+async function dzSaveLabResult(id, analysis) {
+  if (!document.getElementById("re_confirm").checked) { alert("Please confirm the values before saving."); return; }
+  await window.dzSupabase.from("lab_queue").update({
+    status: "result_ready",
+    result_items: analysis.parameters || [],
+    abnormal_findings: analysis.abnormalFindings || [],
+    critical_findings: analysis.criticalFindings || [],
+    ai_summary: analysis.cleanSummary, ai_confidence: analysis.confidence,
+    raw_extracted_text: window._dzPendingLabRaw || null,
+    result: analysis.cleanSummary,
+  }).eq("id", id);
+  console.log("[Queue Debug] Lab result entered", { id, critical: analysis.criticalFindings });
+  document.getElementById("labModalHost").innerHTML = "";
+  await dzLoadLabQueue();
+  await dzLoadLabMetrics();
+}
+
 </script>
-<script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("../sw.js").catch(()=>{})})}</script>
 </body>
 </html>
