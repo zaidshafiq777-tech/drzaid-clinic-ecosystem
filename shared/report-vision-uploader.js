@@ -3,6 +3,11 @@
 // Reads a PDF/image file, sends it to the real n8n Gemini Vision
 // webhook (key lives only in n8n), and returns a structured result.
 // Frontend never sees or holds the Gemini API key.
+//
+// FIX: previously called response.json() blindly, which threw
+// "Unexpected end of JSON input" on any empty/malformed n8n response.
+// Now routes through dzNormalizeReportResponse() (response-parser.js)
+// which reads the body as text first and never throws.
 // ============================================================
 
 const DZ_VISION_WEBHOOK = window.DZ_CONFIG.N8N_BASE_URL + "/dz-report-vision-analyzer";
@@ -21,7 +26,8 @@ function dzFileToBase64(file) {
 }
 
 /** Uploads a report file to the real Gemini Vision pipeline.
- *  Returns { ok, ...structuredFields } or { ok:false, error, fallback }. */
+ *  Returns { ok, ...structuredFields } or { ok:false, error, fallback }.
+ *  Never throws - all response handling goes through the safe parser. */
 async function dzUploadReportForVision(file, reportType, patientContext) {
   const SUPPORTED = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic"];
   if (!SUPPORTED.includes(file.type)) {
@@ -45,9 +51,7 @@ async function dzUploadReportForVision(file, reportType, patientContext) {
         patientContext: patientContext || {},
       }),
     });
-    if (!res.ok) return { ok: false, error: `Vision service returned ${res.status}`, fallback: "Paste report text manually" };
-    const data = await res.json();
-    return data;
+    return await dzNormalizeReportResponse(res);
   } catch (e) {
     return { ok: false, error: e.message || "Network error reaching the vision service", fallback: "Paste report text manually" };
   }
