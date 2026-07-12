@@ -1,5 +1,5 @@
 // Dr. Zaid Healthcare OS — Service Worker (Milestone 12 - cache-bug fix)
-const CACHE_NAME = "drzaid-os-v7-ai-router";
+const CACHE_NAME = "drzaid-os-v8-report-fix";
 const APP_SHELL = [
   "shared/login.html",
   "shared/theme.css",
