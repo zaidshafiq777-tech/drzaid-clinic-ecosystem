@@ -18,6 +18,7 @@
 <script src="../shared/auth.js?v=20260710c"></script>
 <script src="../shared/shell.js?v=20260710c"></script>
 <script src="../shared/clinical.js?v=20260710c"></script>
+<script src="../shared/keyboard-navigation.js"></script>
 <script src="../shared/visit-status.js?v=20260710c"></script>
 <script src="../shared/date-utils.js?v=20260710c"></script>
 <script src="../shared/queue-service.js?v=20260711fix"></script>
@@ -121,22 +122,36 @@ function dzRenderReceptionDebug(debug) {
 
 /** One button per status, matching the canonical lifecycle in shared/visit-status.js. */
 function dzActionButtons(t) {
-  const btn = (label, fn) => `<button class="ghost-refresh" style="padding:5px 10px;font-size:11.5px;margin-right:4px" onclick="${fn}">${label}</button>`;
+  const btn = (label, fn, color) => `<button class="ghost-refresh" style="padding:5px 10px;font-size:11.5px;margin-right:4px${color?';color:'+color:''}" onclick="${fn}">${label}</button>`;
+  const vitalsBtn = (t.status !== DZ_STATUS.COMPLETED && t.status !== DZ_STATUS.CANCELLED)
+    ? btn("Add/Update Vitals", `window.location.href='vitals.html?token=${t.tokenId}'`) : "";
+  const cancelBtn = (t.status !== DZ_STATUS.COMPLETED && t.status !== DZ_STATUS.CANCELLED)
+    ? btn("Cancel Token", `dzCancelToken('${t.tokenId}')`, "var(--signal-critical)") : "";
+  let statusBtns = "";
   switch (t.status) {
     case DZ_STATUS.REGISTERED:
-      return btn("Send to Vitals", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.WAITING_VITALS}')`) +
+      statusBtns = btn("Send to Vitals", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.WAITING_VITALS}')`) +
              btn("Send to Doctor", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.WAITING_DOCTOR}')`);
+      break;
     case DZ_STATUS.WAITING_VITALS:
     case DZ_STATUS.VITALS_DONE:
-      return btn("Send to Doctor", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.WAITING_DOCTOR}')`);
+      statusBtns = btn("Send to Doctor", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.WAITING_DOCTOR}')`);
+      break;
     case DZ_STATUS.WAITING_DOCTOR:
-      return btn("Mark With Doctor", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.WITH_DOCTOR}')`);
+      statusBtns = btn("Mark With Doctor", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.WITH_DOCTOR}')`);
+      break;
     case DZ_STATUS.WITH_DOCTOR:
     case DZ_STATUS.DOCTOR_DONE:
-      return btn("Complete", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.COMPLETED}')`);
-    default:
-      return "";
+      statusBtns = btn("Complete", `dzTransition('${t.tokenId}','${t.visitId}','${DZ_STATUS.COMPLETED}')`);
+      break;
   }
+  return vitalsBtn + statusBtns + cancelBtn;
+}
+
+async function dzCancelToken(tokenId) {
+  if (!confirm("Cancel this token?")) return;
+  await window.dzSupabase.from("tokens").update({ status: "cancelled" }).eq("id", tokenId);
+  await dzLoadQueue();
 }
 
 /** Single real state-transition function - updates both tokens.status (the
@@ -167,6 +182,12 @@ function dzStartReceptionPolling() {
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { dzLoadQueue(); dzLoadMetrics(); } });
 dzStartReceptionPolling();
+
+dzRegisterKeyboardShortcuts({
+  n: () => (window.location.href = "registration.html"),
+  q: () => document.getElementById("queueTable")?.scrollIntoView({ behavior: "smooth" }),
+  v: () => (window.location.href = "vitals.html"),
+});
 </script>
 <script>if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("../sw.js").catch(()=>{})})}</script>
 </body>
