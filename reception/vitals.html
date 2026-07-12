@@ -24,6 +24,7 @@
 <script src="../shared/auth.js"></script>
 <script src="../shared/shell.js"></script>
 <script src="../shared/clinical.js"></script>
+<script src="../shared/keyboard-navigation.js"></script>
 <script src="../shared/visit-status.js"></script>
 <script src="../shared/response-parser.js"></script>
 <script src="../shared/ai-manager.js"></script>
@@ -71,6 +72,12 @@ let dzOrgId=null, dzQueueRows=[];
 
   ["vWeight","vHeight"].forEach(id => document.getElementById(id).addEventListener("input", dzUpdateBMI));
   await dzLoadPending();
+  const tokenParam = new URLSearchParams(window.location.search).get("token");
+  if (tokenParam) {
+    const idx = dzQueueRows.findIndex(t => t.id === tokenParam);
+    if (idx !== -1) dzOpenVitals(idx);
+  }
+  dzEnableEnterNavigation(document.getElementById("vitalsForm"));
 })();
 
 function dzUpdateBMI() {
