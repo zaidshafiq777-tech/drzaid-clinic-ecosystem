@@ -49,6 +49,7 @@
 <script src="../shared/auth.js?v=20260710c"></script>
 <script src="../shared/shell.js?v=20260710c"></script>
 <script src="../shared/clinical.js?v=20260710c"></script>
+<script src="../shared/keyboard-navigation.js"></script>
 <script src="../shared/date-utils.js?v=20260710c"></script>
 <script src="../shared/queue-service.js?v=20260711fix"></script>
 <script src="../shared/response-parser.js"></script>
@@ -80,6 +81,10 @@ let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCur
       <h2 style="font-size:13px">⚠ Pharmacy Substitution Requests — Your Approval Needed</h2>
       <div id="subApprovalList"></div>
     </div>
+    <div class="dz-panel" id="labResultsPanel" style="display:none;background:#E8F1FB;border-color:#C5DCF3">
+      <h2 style="font-size:13px">🧪 Pending Lab Results</h2>
+      <div id="labResultsList"></div>
+    </div>
     <div class="wsGrid">
       <div class="dz-panel" style="padding:12px">
         <h2 style="font-size:13px;margin-bottom:8px">Your Queue</h2>
@@ -88,6 +93,7 @@ let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCur
       <div id="dMain">${dzEmptyState("✚","Select a patient","Choose a patient from your queue on the left to begin.")}</div>
     </div>`;
   await dzLoadQueue();
+  await dzLoadPendingLabResults();
   await dzLoadSubstitutionApprovals();
   dzStartDoctorPolling();
 })();
@@ -126,9 +132,9 @@ async function dzApproveSubstitution(queueId, approved) {
 let dzDoctorPollHandle = null;
 function dzStartDoctorPolling() {
   if (dzDoctorPollHandle) return;
-  dzDoctorPollHandle = setInterval(() => { if (!document.hidden) { dzLoadQueue(); dzLoadSubstitutionApprovals(); } }, 12000);
+  dzDoctorPollHandle = setInterval(() => { if (!document.hidden) { dzLoadQueue(); dzLoadSubstitutionApprovals(); dzLoadPendingLabResults(); } }, 12000);
 }
-document.addEventListener("visibilitychange", () => { if (!document.hidden) { dzLoadQueue(); dzLoadSubstitutionApprovals(); } });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { dzLoadQueue(); dzLoadSubstitutionApprovals(); dzLoadPendingLabResults(); } });
 
 async function dzLoadQueue() {
   const host = document.getElementById("dQueue");
@@ -303,6 +309,21 @@ async function dzOpenPatient(i) {
         <div style="font-size:10.5px;color:var(--slate-500);margin-top:6px">Drug-interaction checking is not available — it requires a licensed interaction database, not currently integrated. See DATABASE_CHANGES_REQUIRED.md.</div>
       </div>
 
+      <div style="background:var(--slate-50);border-radius:8px;padding:12px;margin:14px 0">
+        <div style="font-size:12px;font-weight:700;color:var(--slate-700);margin-bottom:6px">🧪 Order Lab Test</div>
+        <select id="labTestSelect" multiple size="4" style="width:100%;padding:6px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px">
+          ${["CBC","ESR","CRP","LFT","RFT","Urine R/E","Urine C/S","Blood Sugar","HbA1c","Lipid Profile","Thyroid Profile","Dengue NS1","Malaria","HBsAg","Anti-HCV","Pregnancy Test","Troponin","Electrolytes","Uric Acid","Stool R/E"].map(t=>`<option>${t}</option>`).join("")}
+        </select>
+        <input id="labCustomTest" placeholder="Custom test name (optional)" style="width:100%;margin-top:6px;padding:7px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px">
+          <select id="labPriority" style="padding:7px;border:1px solid var(--slate-200);border-radius:6px;font-size:12px"><option value="routine">Routine</option><option value="urgent">Urgent</option><option value="stat">STAT</option></select>
+          <label style="font-size:11.5px;display:flex;align-items:center;gap:4px"><input type="checkbox" id="labFasting"> Fasting Required</label>
+        </div>
+        <input id="labClinicalNotes" placeholder="Clinical notes for lab" style="width:100%;margin-top:6px;padding:7px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px">
+        <button class="ai-btn" style="margin-top:6px;background:var(--clinical-700);color:#fff" onclick="dzSendToLab()">Send to Lab</button>
+        <div id="labOrderStatus" style="font-size:11.5px;margin-top:4px"></div>
+      </div>
+
       <button class="primary-btn" onclick="dzApprovePrescription()">Approve &amp; Send to Pharmacy</button>
       <div id="rxStatus" style="margin-top:10px;font-size:12.5px"></div>
     </div>
@@ -315,6 +336,7 @@ async function dzOpenPatient(i) {
       <div id="rxPreviewActions" style="margin-top:10px;display:none">
         <button class="ai-btn" onclick="dzAnalyzeTranscript(true)">Regenerate</button>
         <button class="ai-btn" onclick="dzPrintPrescription()">Print</button>
+        <button class="ai-btn" style="background:var(--clinical-700);color:#fff" onclick="dzSendToPrintDesk()">Send to Print Desk</button>
         <button class="ai-btn" onclick="alert('PDF export requires a rendering library not yet added — use Print → Save as PDF from the browser print dialog for now.')">Export PDF</button>
         <button class="ai-btn" onclick="alert('WhatsApp sending requires a WhatsApp Business API account — not connected yet. See MANUAL_SETUP_REQUIRED.md.')">Send WhatsApp Summary</button>
       </div>
@@ -348,6 +370,93 @@ function dzReadMedsFromDom() {
   return out;
 }
 function dzAddMedRow() { dzMeds.push({name:"",dosage:"",frequency:"",duration:""}); dzRenderMeds(); }
+
+/** PART 7 — Doctor Order Lab Test */
+async function dzSendToLab() {
+  const status = document.getElementById("labOrderStatus");
+  if (!dzSelected) { status.innerHTML = `<span style="color:var(--signal-critical)">Select a patient first.</span>`; return; }
+  const selEl = document.getElementById("labTestSelect");
+  const selected = Array.from(selEl.selectedOptions).map(o => o.value);
+  const custom = document.getElementById("labCustomTest").value.trim();
+  if (custom) selected.push(custom);
+  if (!selected.length) { status.innerHTML = `<span style="color:var(--signal-critical)">Select at least one test.</span>`; return; }
+  if (!dzPreventDoubleSubmit(document.activeElement)) return;
+
+  status.textContent = "Sending…";
+  try {
+    const priority = document.getElementById("labPriority").value;
+    const fasting = document.getElementById("labFasting").checked;
+    const notes = document.getElementById("labClinicalNotes").value.trim();
+    const { count } = await window.dzSupabase.from("lab_queue").select("id",{count:"exact",head:true}).eq("organization_id", dzOrgId);
+    const orderNumber = "LAB-" + String((count||0) + 1).padStart(5, "0");
+
+    for (const test of selected) {
+      await window.dzSupabase.from("lab_queue").insert({
+        organization_id: dzOrgId, visit_id: dzSelected.visit_id, patient_id: dzSelected.patient_id,
+        doctor_id: dzDoctorId, test_name: test, status: "ordered", priority,
+        fasting_required: fasting, clinical_notes: notes || null,
+        order_number: orderNumber, token_number: dzSelected.token_number,
+      });
+    }
+    if (dzSelected.visit_id) await window.dzSupabase.from("visits").update({ status: "sent_to_lab" }).eq("id", dzSelected.visit_id);
+    await window.dzSupabase.from("tokens").update({ status: "sent_to_lab" }).eq("id", dzSelected.id);
+    console.log("[Queue Debug] Lab order created", { orderNumber, tests: selected });
+    status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Lab order sent successfully (${orderNumber}).</span>`;
+    document.getElementById("labCustomTest").value = "";
+    document.getElementById("labClinicalNotes").value = "";
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--signal-critical)">Failed: ${e.message}</span>`;
+  }
+}
+
+/** PART 17 — Send finalized prescription to Print Desk */
+async function dzSendToPrintDesk() {
+  const status = document.getElementById("rxStatus");
+  if (!dzSelected) { alert("Select a patient first."); return; }
+  if (!dzLastSavedPrescriptionId) { alert("Approve & save the prescription first, then send to Print Desk."); return; }
+  try {
+    await window.dzSupabase.from("print_jobs").insert({
+      organization_id: dzOrgId, prescription_id: dzLastSavedPrescriptionId,
+      patient_id: dzSelected.patient_id, visit_id: dzSelected.visit_id, doctor_id: dzDoctorId,
+      requested_by: dzDoctorId, status: "waiting_print",
+    });
+    console.log("[Queue Debug] Prescription sent to Print Desk", { prescriptionId: dzLastSavedPrescriptionId });
+    status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Prescription sent to Print Desk.</span>`;
+  } catch (e) {
+    alert("Could not send to Print Desk: " + e.message);
+  }
+}
+let dzLastSavedPrescriptionId = null;
+
+/** PART 13 — Pending Lab Results panel */
+async function dzLoadPendingLabResults() {
+  const { data } = await window.dzSupabase.from("lab_queue")
+    .select("id, test_name, status, ai_summary, critical_findings, patients(full_name)")
+    .eq("organization_id", dzOrgId).eq("doctor_id", dzDoctorId).eq("status", "result_ready");
+  const panel = document.getElementById("labResultsPanel");
+  const list = document.getElementById("labResultsList");
+  if (!panel || !list) return;
+  if (!data || !data.length) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+  list.innerHTML = data.map(r => `
+    <div style="padding:6px 0;border-top:1px solid var(--clinical-100);font-size:12.5px">
+      <b>${r.patients?.full_name||''}</b>: ${r.test_name} ${r.critical_findings?.length?'<span style="color:var(--signal-critical);font-weight:700">🚨 CRITICAL</span>':''}
+      <div style="font-size:11.5px;color:var(--slate-500)">${r.ai_summary||'No AI summary yet.'}</div>
+      <button class="ai-btn" onclick="dzAddLabSummaryToPrescription('${r.id}')">Add Lab Summary to Prescription</button>
+      <button class="ai-btn" onclick="dzMarkLabReviewed('${r.id}')">Mark Reviewed</button>
+    </div>`).join("");
+}
+async function dzAddLabSummaryToPrescription(labId) {
+  const { data } = await window.dzSupabase.from("lab_queue").select("test_name, ai_summary").eq("id", labId).single();
+  if (!data) return;
+  dzReportSummaries.push(`${data.test_name}: ${data.ai_summary || "Result available, see lab report."}`);
+  alert("Lab summary added to prescription context.");
+}
+async function dzMarkLabReviewed(labId) {
+  await window.dzSupabase.from("lab_queue").update({ status: "doctor_reviewed", doctor_reviewed: true, doctor_reviewed_at: new Date().toISOString(), doctor_reviewed_by: dzDoctorId }).eq("id", labId);
+  await dzLoadPendingLabResults();
+}
+
 
 function dzToggleInlineVitals() {
   const el = document.getElementById("inlineVitalsForm");
@@ -735,6 +844,7 @@ async function dzApprovePrescription() {
       header_snapshot: headerSnapshot,
     }).select("id").single();
     if (rErr) throw rErr;
+    dzLastSavedPrescriptionId = rx.id;
 
     dzMeds = dzReadMedsFromDom(); // re-sync from DOM before saving - fixes medicines not saving if typed without clicking away
     const meds = dzMeds.filter(m => m.name.trim());
