@@ -52,6 +52,8 @@
 <script src="../shared/keyboard-navigation.js"></script>
 <script src="../shared/date-utils.js?v=20260710c"></script>
 <script src="../shared/queue-service.js?v=20260711fix"></script>
+<script src="../shared/event-bus.js"></script>
+<script src="../shared/realtime-service.js"></script>
 <script src="../shared/response-parser.js"></script>
 <script src="../shared/ai-manager.js?v=20260710c"></script>
 <script src="../shared/automation-manager.js?v=20260710c"></script>
@@ -96,6 +98,15 @@ let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCur
   await dzLoadPendingLabResults();
   await dzLoadSubstitutionApprovals();
   dzStartDoctorPolling();
+
+  // STEP 4/10 — instant updates via real Supabase Realtime + BroadcastChannel,
+  // so a new registration in the Reception tab appears here within ~1 second
+  // instead of waiting for the next 10-second poll.
+  dzSubscribeClinicQueue(dzOrgId, () => { console.log("[Doctor Queue] Realtime event received"); dzLoadQueue(); console.log("[Doctor Queue] Queue reloaded"); });
+  dzOnBroadcastEvent("token-created", (detail) => {
+    console.log("[Doctor Queue] Instant token-created event received", detail);
+    dzLoadQueue();
+  });
 })();
 
 /** STEP 7 — pharmacist cannot silently replace a medicine. A substitution
@@ -132,13 +143,15 @@ async function dzApproveSubstitution(queueId, approved) {
 let dzDoctorPollHandle = null;
 function dzStartDoctorPolling() {
   if (dzDoctorPollHandle) return;
-  dzDoctorPollHandle = setInterval(() => { if (!document.hidden) { dzLoadQueue(); dzLoadSubstitutionApprovals(); dzLoadPendingLabResults(); } }, 12000);
+  dzDoctorPollHandle = setInterval(() => { if (!document.hidden) { dzLoadQueue(); dzLoadSubstitutionApprovals(); dzLoadPendingLabResults(); } }, 10000);
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { dzLoadQueue(); dzLoadSubstitutionApprovals(); dzLoadPendingLabResults(); } });
 
 async function dzLoadQueue() {
   const host = document.getElementById("dQueue");
+  const myVersion = dzNextRequestVersion("doctor-queue"); // STEP 9 — discard stale results
   const { rows, debug } = await dzLoadQueueService(dzOrgId, { onlyToday: false, statusFilter: DZ_DOCTOR_QUEUE_STATUSES });
+  if (!dzIsLatestRequest("doctor-queue", myVersion)) { console.log("[Doctor Queue] Discarding stale response"); return; }
   // Map the normalized queue-service shape back to the legacy shape the rest
   // of this file already reads (dzSelected.id / .patient_id / .visit_id /
   // .patients.full_name / .visits.chief_complaint / .token_number) - this
