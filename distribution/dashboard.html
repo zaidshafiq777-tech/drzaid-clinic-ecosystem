@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Distribution — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  /* Distribution mounts INSIDE the existing dz-content area - no separate
+     full-page chrome, no min-h-screen conflicts, no duplicate scrollbars. */
+  #distribution-root { min-height: 60vh; }
+  #distribution-root .min-h-screen { min-height: unset !important; }
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>
+(async () => {
+  // Distribution is authorized for owner-tier + explicit distro_role assignment
+  // only - Reception/Doctor/Lab/Pharmacy staff never see this, per role rules.
+  const session = await requireRole(null); // auth/profile gate only, role checked below
+  if (!session) return;
+  const isOwnerTier = ["org_owner","branch_admin","super_admin"].includes(session.profile.role);
+  const hasDistroAccess = isOwnerTier || !!session.profile.distro_role;
+  if (!hasDistroAccess) {
+    document.getElementById("dz-shell-root").innerHTML = "";
+    alert("You do not have access to Distribution.");
+    window.location.href = getDefaultPortal(session.profile.role);
+    return;
+  }
+
+  dzRenderShell({ activeKey: "distribution", title: "Distribution", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `<div id="distribution-root"></div>`;
+
+  // Load React 19 + the compiled Distribution bundle.
+  window.__DZ_EMBEDDED__ = true;
+
+  const cssLink = document.createElement("link");
+  cssLink.rel = "stylesheet";
+  cssLink.href = "dist/assets/index-BQaBUllC.css";
+  document.head.appendChild(cssLink);
+
+  // Give the bundle a #root element to mount into (it was built with its
+  // own createRoot(document.getElementById('root')) bootstrap - simplest
+  // safe integration without a deeper library-mode rebuild this round).
+  // Note: the bundle already contains its own React 19 runtime (standard
+  // Vite app-mode build bundles all dependencies) - no separate CDN load needed.
+  const rootDiv = document.createElement("div");
+  rootDiv.id = "root";
+  document.getElementById("distribution-root").appendChild(rootDiv);
+
+  const s3 = document.createElement("script");
+  s3.type = "module";
+  s3.src = "dist/assets/index-DrY30JnR.js";
+  document.body.appendChild(s3);
+})();
+</script>
+</body>
+</html>
