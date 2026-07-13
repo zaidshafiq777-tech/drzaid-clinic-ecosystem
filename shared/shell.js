@@ -11,16 +11,24 @@ const DZ_NAV_ITEMS = [
   { key: "pharmacy",   label: "Pharmacy",        href: "../pharmacy/dashboard.html",  icon: "℞", roles: ["org_owner","branch_admin","super_admin","pharmacist"] },
   { key: "lab",        label: "Lab",             href: "../lab/dashboard.html",       icon: "⚗", roles: ["org_owner","branch_admin","super_admin","lab_technician"] },
   { key: "printdesk",  label: "Print Desk",      href: "../print-desk/dashboard.html", icon: "🖨", roles: ["org_owner","branch_admin","super_admin","doctor","receptionist"] },
+  { key: "distribution", label: "Distribution",  href: "../distribution/dashboard.html", icon: "📦", roles: ["org_owner","branch_admin","super_admin"], group: "business" },
   { key: "patient",    label: "Patient Portal",  href: "../patient/portal.html",      icon: "⌂", roles: ["org_owner","branch_admin","super_admin","receptionist"] },
   { key: "settings",   label: "Settings",        href: "../settings/settings.html",   icon: "⚙", roles: ["org_owner","branch_admin","super_admin"] },
 ];
 
 function dzRenderShell({ activeKey, title, profile }) {
   const role = profile.role;
-  const navHtml = DZ_NAV_ITEMS
-    .filter(item => item.roles.includes(role))
-    .map(item => `<a href="${item.href}" class="${item.key===activeKey?'active':''}"><span class="icon">${item.icon}</span>${item.label}</a>`)
-    .join("");
+  const visibleItems = DZ_NAV_ITEMS.filter(item => item.roles.includes(role));
+  let lastGroup = null;
+  const navHtml = visibleItems.map(item => {
+    const group = item.group || "clinical";
+    let sectionLabel = "";
+    if (group !== lastGroup) {
+      sectionLabel = `<div style="font-size:9.5px;font-weight:700;color:rgba(255,255,255,.35);text-transform:uppercase;letter-spacing:.08em;padding:${lastGroup?'14px':'2px'} 12px 4px">${group === "business" ? "Business" : "Clinical"}</div>`;
+      lastGroup = group;
+    }
+    return sectionLabel + `<a href="${item.href}" class="${item.key===activeKey?'active':''}"><span class="icon">${item.icon}</span>${item.label}</a>`;
+  }).join("");
 
   const initials = (profile.full_name || "?").split(" ").map(w => w[0]).join("").slice(0,2).toUpperCase();
 
