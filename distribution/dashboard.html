@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Distribution — Dr. Zaid Healthcare OS</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/date-utils.js"></script>
+<script src="../shared/response-parser.js"></script>
+<script src="../shared/ai-manager.js"></script>
+<script src="../shared/distro-agent.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>
+let dzOrgId = null;
+(async () => {
+  const session = await requireRole(null);
+  if (!session) return;
+  const isOwnerTier = ["org_owner","branch_admin","super_admin"].includes(session.profile.role);
+  if (!isOwnerTier && !session.profile.distro_role) {
+    alert("You do not have access to Distribution.");
+    window.location.href = getDefaultPortal(session.profile.role);
+    return;
+  }
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "distribution", title: "Distribution Command Center", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-grid" id="distroMetrics">
+      ${dzCard("Total Medicines","…")}${dzCard("Active Retailers","…")}${dzCard("Pending Invoices","…")}${dzCard("Recovery Overdue","…")}
+    </div>
+    <div class="dz-panel">
+      <h2>🤖 Owner Distribution Copilot Brief <span class="dz-badge live">AI</span></h2>
+      <div id="distroBrief" style="font-size:13px;color:var(--slate-700);line-height:1.6">Loading…</div>
+      <button class="ghost-refresh" style="margin-top:8px" onclick="dzLoadBrief()">Regenerate Brief</button>
+    </div>
+    <div class="dz-panel">
+      <h2>🧭 Modules</h2>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-top:10px">
+        <a href="medicines.html" class="dz-module-card">💊 Medicines &amp; Batches</a>
+        <a href="suppliers.html" class="dz-module-card">🚚 Suppliers &amp; Purchases</a>
+        <a href="retailers.html" class="dz-module-card">🏪 Retailers &amp; Orders</a>
+        <a href="invoices.html" class="dz-module-card">🧾 Invoices</a>
+        <a href="dispatch.html" class="dz-module-card">📦 Dispatch &amp; Recovery</a>
+      </div>
+    </div>
+    <div class="dz-panel">
+      <h2>🚨 Expiry Radar <span class="dz-badge live">Live</span></h2>
+      <div id="expirySummary" style="font-size:12.5px">Loading…</div>
+    </div>`;
+
+  document.head.insertAdjacentHTML("beforeend", `<style>.dz-module-card{display:block;padding:16px;background:#fff;border:1px solid var(--slate-200);border-radius:10px;font-weight:700;font-size:13px;color:var(--clinical-700);text-align:center}.dz-module-card:hover{border-color:var(--clinical-700);box-shadow:var(--shadow-card)}</style>`);
+
+  await dzLoadMetrics();
+  await dzLoadExpirySummary();
+  await dzLoadBrief();
+})();
+
+async function dzLoadMetrics() {
+  const [{count:medCount}, {count:retCount}, {data:invData}, {data:retData}] = await Promise.all([
+    window.dzSupabase.from("distro_medicines").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId).eq("status","active"),
+    window.dzSupabase.from("distro_retailers").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId).eq("status","active"),
+    window.dzSupabase.from("distro_invoices").select("id,status").eq("organization_id",dzOrgId).neq("status","Paid"),
+    window.dzSupabase.from("distro_retailers").select("id,shop_name,current_balance,credit_limit").eq("organization_id",dzOrgId).gt("current_balance",0),
+  ]);
+  const overdueCount = (retData||[]).filter(r => (r.current_balance||0) > (r.credit_limit||0)).length;
+  document.getElementById("distroMetrics").innerHTML =
+    dzCard("Total Medicines", medCount ?? 0, "Live") +
+    dzCard("Active Retailers", retCount ?? 0, "Live") +
+    dzCard("Pending Invoices", (invData||[]).length, "Live") +
+    dzCard("Over Credit Limit", overdueCount, overdueCount ? "Needs attention" : "All within limits");
+}
+
+async function dzLoadExpirySummary() {
+  const { data: batches } = await window.dzSupabase.from("distro_batches").select("*, distro_medicines(product_name)").eq("organization_id",dzOrgId).gt("current_quantity",0);
+  const risk = dzScanExpiryRisk(batches || []);
+  const host = document.getElementById("expirySummary");
+  if (!batches || !batches.length) { host.innerHTML = dzEmptyState("✓","No batch data yet","Add medicine batches to see expiry risk here."); return; }
+  const rows = [
+    ["🔴 Already Expired", risk.expired],
+    ["🟠 Expiring in 30 days", risk.in30],
+    ["🟡 Expiring in 60 days", risk.in60],
+    ["🟢 Expiring in 90 days", risk.in90],
+  ];
+  host.innerHTML = rows.map(([label, list]) => `
+    <div style="padding:6px 0;border-top:1px solid var(--slate-100)">
+      <b>${label}:</b> ${list.length ? list.map(b=>`${b.distro_medicines?.product_name||'?'} (${b.current_quantity} units, ${b.daysLeft}d)`).join(", ") : "None"}
+    </div>`).join("");
+}
+
+async function dzLoadBrief() {
+  const host = document.getElementById("distroBrief");
+  host.textContent = "Generating…";
+  const { count: medCount } = await window.dzSupabase.from("distro_medicines").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId);
+  const { count: invCount } = await window.dzSupabase.from("distro_invoices").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId);
+  const { data: batches } = await window.dzSupabase.from("distro_batches").select("expiry_date, current_quantity").eq("organization_id",dzOrgId).gt("current_quantity",0);
+  const risk = dzScanExpiryRisk(batches || []);
+  const stats = { totalMedicines: medCount||0, totalInvoices: invCount||0, expiredBatches: risk.expired.length, expiringIn30Days: risk.in30.length };
+  const brief = await dzGenerateDistroBrief(stats);
+  host.textContent = brief;
+}
+</script>
+</body>
+</html>
