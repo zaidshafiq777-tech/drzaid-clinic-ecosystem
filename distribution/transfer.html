@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clinic Pharmacy Transfer — Distribution</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase;padding:7px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:6px;border-bottom:1px solid var(--slate-100)}
+  .st{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
+  .st.requested{background:#FFF7E6;color:var(--signal-warning)}
+  .st.approved{background:#E8F1FB;color:var(--signal-info)}
+  .st.dispatched{background:var(--clinical-100);color:var(--clinical-700)}
+  .st.received{background:#E6F6EE;color:var(--signal-success)}
+  .st.rejected{background:#FDECEC;color:var(--signal-critical)}
+  .btn{padding:5px 10px;border:none;border-radius:6px;font-size:11px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null;
+(async () => {
+  const session = await requireRole(null);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "distribution", title: "Clinic Pharmacy Transfer", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <h2>Clinic Pharmacy Requisitions <span class="dz-badge live">Live</span></h2>
+      <div class="sub">Clinic Pharmacy → Requisition → Distribution approves → prepares → dispatches → Clinic receives. Both stock ledgers update.</div>
+      <div id="transferList" style="margin-top:12px">Loading…</div>
+    </div>`;
+  await dzLoadTransfers();
+})();
+
+async function dzLoadTransfers() {
+  const host = document.getElementById("transferList");
+  const { data, error } = await window.dzSupabase.from("clinic_distro_transfers").select("*, distro_medicines(product_name), distro_batches(batch_number, current_quantity)").eq("organization_id",dzOrgId).order("created_at",{ascending:false});
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("🔄","No requisitions yet","Clinic Pharmacy can request stock from the Pharmacy dashboard's 'Request from Distribution' button."); return; }
+  host.innerHTML = `<table><thead><tr><th>Medicine</th><th>Qty Requested</th><th>Status</th><th>Requested</th><th>Actions</th></tr></thead>
+    <tbody>${data.map(t => `<tr>
+      <td>${dzEsc(t.clinic_medicine_name)}</td><td>${t.quantity}</td>
+      <td><span class="st ${t.status}">${t.status}</span></td>
+      <td>${new Date(t.created_at).toLocaleDateString("en-GB")}</td>
+      <td>${dzTransferActions(t)}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+function dzTransferActions(t) {
+  if (t.status === "requested") {
+    return `<button class="btn" style="background:#E6F6EE;color:var(--signal-success)" onclick="dzApproveTransfer('${t.id}')">Approve</button>
+      <button class="btn" style="background:#FDECEC;color:var(--signal-critical)" onclick="dzRejectTransfer('${t.id}')">Reject</button>`;
+  }
+  if (t.status === "approved") {
+    return `<button class="btn" style="background:var(--clinical-700);color:#fff" onclick="dzDispatchTransfer('${t.id}')">Dispatch (deduct warehouse stock)</button>`;
+  }
+  if (t.status === "dispatched") return `<span style="font-size:11px;color:var(--slate-500)">Waiting for Clinic Pharmacy to receive</span>`;
+  return "";
+}
+
+async function dzApproveTransfer(id) {
+  const me = (await window.dzSupabase.auth.getUser()).data.user.id;
+  await window.dzSupabase.from("clinic_distro_transfers").update({ status: "approved", approved_by: me }).eq("id", id);
+  await dzLoadTransfers();
+}
+async function dzRejectTransfer(id) {
+  await window.dzSupabase.from("clinic_distro_transfers").update({ status: "rejected" }).eq("id", id);
+  await dzLoadTransfers();
+}
+
+/** Real dispatch: deducts distro_batches stock (FEFO), logs distro_stock_ledger,
+ *  marks transfer dispatched. Clinic side "receive" (in pharmacy dashboard)
+ *  then adds to clinic medicine_batches + logs clinic stock_ledger. */
+async function dzDispatchTransfer(id) {
+  const { data: t } = await window.dzSupabase.from("clinic_distro_transfers").select("*").eq("id",id).single();
+  if (!t) return;
+  const { data: batches } = await window.dzSupabase.from("distro_batches").select("*").eq("medicine_id", t.distro_medicine_id).gt("current_quantity",0).order("expiry_date");
+  let remaining = t.quantity;
+  for (const b of (batches||[])) {
+    if (remaining <= 0) break;
+    const take = Math.min(b.current_quantity, remaining);
+    await window.dzSupabase.from("distro_batches").update({ current_quantity: b.current_quantity - take }).eq("id", b.id);
+    await window.dzSupabase.from("distro_stock_ledger").insert({
+      organization_id: dzOrgId, transaction_type: "Clinic Pharmacy Transfer", product_id: t.distro_medicine_id,
+      batch_id: b.id, batch_number: b.batch_number, expiry_date: b.expiry_date,
+      quantity_in: 0, quantity_out: take, balance_after: b.current_quantity - take,
+      reference_type: "clinic_transfer", reference_id: t.id, related_party: "Clinic Pharmacy", user_role: "Owner", approval_status: "Approved",
+    });
+    remaining -= take;
+  }
+  if (remaining > 0) { alert(`Warning: only ${t.quantity-remaining} of ${t.quantity} units were available in warehouse stock. Dispatching partial quantity.`); }
+  await window.dzSupabase.from("clinic_distro_transfers").update({ status: "dispatched", dispatched_at: new Date().toISOString(), quantity: t.quantity-remaining }).eq("id", id);
+  await dzLoadTransfers();
+}
+</script>
+</body>
+</html>
