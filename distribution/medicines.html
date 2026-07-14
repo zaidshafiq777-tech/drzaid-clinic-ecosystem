@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Medicines — Distribution</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase;padding:7px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:6px;border-bottom:1px solid var(--slate-100)}
+  .fld{margin-bottom:10px}
+  .fld label{font-size:11.5px;font-weight:600;display:block;margin-bottom:4px}
+  .fld input,.fld select{width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px;box-sizing:border-box}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  .tab{padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--slate-500);border-bottom:2px solid transparent;cursor:pointer}
+  .tab.active{color:var(--clinical-700);border-color:var(--clinical-700)}
+  .expiry-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
+  .expiry-badge.expired{background:#FDECEC;color:var(--signal-critical)}
+  .expiry-badge.soon{background:#FFF7E6;color:var(--signal-warning)}
+  .expiry-badge.ok{background:#E6F6EE;color:var(--signal-success)}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/response-parser.js"></script>
+<script src="../shared/ai-manager.js"></script>
+<script src="../shared/distro-agent.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null;
+(async () => {
+  const session = await requireRole(null);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "distribution", title: "Medicines &amp; Batches", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <div class="tabs" style="display:flex;gap:4px;border-bottom:1px solid var(--slate-200);margin-bottom:14px">
+        <div class="tab active" onclick="dzSwitchTab(0)">Medicine Master</div>
+        <div class="tab" onclick="dzSwitchTab(1)">Batches &amp; Expiry</div>
+      </div>
+      <div id="panel-0">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <input id="medSearch" placeholder="Search medicine…" style="padding:8px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px;width:260px" oninput="dzSearchMedicines()">
+          <button class="primary-btn" onclick="dzToggleAddMedicine()">+ Add Medicine</button>
+        </div>
+        <div id="addMedForm" style="display:none;background:var(--slate-50);border-radius:8px;padding:14px;margin-bottom:14px"></div>
+        <div id="medicineList"></div>
+      </div>
+      <div id="panel-1" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div class="sub" style="margin:0">FEFO — earliest-expiring batch shown first for each medicine.</div>
+          <button class="primary-btn" onclick="dzToggleAddBatch()">+ Add Batch</button>
+        </div>
+        <div id="addBatchForm" style="display:none;background:var(--slate-50);border-radius:8px;padding:14px;margin-bottom:14px"></div>
+        <div id="batchList"></div>
+      </div>
+    </div>`;
+  await dzSearchMedicines();
+})();
+
+function dzSwitchTab(i) {
+  document.querySelectorAll(".tab").forEach((t,idx)=>t.classList.toggle("active",idx===i));
+  document.getElementById("panel-0").style.display = i===0?"block":"none";
+  document.getElementById("panel-1").style.display = i===1?"block":"none";
+  if (i===1) dzLoadBatches();
+}
+
+function dzToggleAddMedicine() {
+  const host = document.getElementById("addMedForm");
+  if (host.style.display === "block") { host.style.display = "none"; return; }
+  host.style.display = "block";
+  host.innerHTML = `
+    <div class="grid3">
+      <div class="fld"><label>Medicine Name *</label><input id="m_name"></div>
+      <div class="fld"><label>Generic Name</label><input id="m_generic"></div>
+      <div class="fld"><label>Brand Name</label><input id="m_brand"></div>
+      <div class="fld"><label>Company/Manufacturer</label><input id="m_company"></div>
+      <div class="fld"><label>Category</label><input id="m_category"></div>
+      <div class="fld"><label>Packing</label><input id="m_packing" placeholder="e.g. 10x10"></div>
+      <div class="fld"><label>Unit</label><input id="m_unit" placeholder="Strip/Box/Bottle"></div>
+      <div class="fld"><label>Rack Location</label><input id="m_rack"></div>
+      <div class="fld"><label>Purchase Rate</label><input id="m_prate" type="number"></div>
+      <div class="fld"><label>Trade Rate</label><input id="m_trate" type="number"></div>
+      <div class="fld"><label>MRP</label><input id="m_mrp" type="number"></div>
+      <div class="fld"><label>Minimum Stock</label><input id="m_minstock" type="number"></div>
+      <div class="fld"><label>Tax Category</label><input id="m_tax" placeholder="e.g. GST 17%"></div>
+    </div>
+    <button class="primary-btn" onclick="dzSaveMedicine()">Save Medicine</button>
+    <span id="medSaveStatus" style="margin-left:8px;font-size:12px"></span>`;
+}
+
+async function dzSaveMedicine() {
+  const status = document.getElementById("medSaveStatus");
+  const name = document.getElementById("m_name").value.trim();
+  if (!name) { status.innerHTML = `<span style="color:var(--signal-critical)">Medicine name is required.</span>`; return; }
+  // Duplicate detection - by name+company, don't create duplicates silently.
+  const company = document.getElementById("m_company").value.trim();
+  const { data: dupes } = await window.dzSupabase.from("distro_medicines").select("id").eq("organization_id",dzOrgId).ilike("product_name", name).eq("company", company || "");
+  if (dupes && dupes.length) { status.innerHTML = `<span style="color:var(--signal-warning)">A medicine with this name and company already exists.</span>`; return; }
+
+  const { error } = await window.dzSupabase.from("distro_medicines").insert({
+    organization_id: dzOrgId, product_name: name,
+    generic_name: document.getElementById("m_generic").value || null,
+    brand_name: document.getElementById("m_brand").value || null,
+    company: company || null, category: document.getElementById("m_category").value || null,
+    packing: document.getElementById("m_packing").value || null, unit: document.getElementById("m_unit").value || null,
+    rack_location: document.getElementById("m_rack").value || null,
+    default_purchase_rate: parseFloat(document.getElementById("m_prate").value)||0,
+    default_trade_rate: parseFloat(document.getElementById("m_trate").value)||0,
+    mrp: parseFloat(document.getElementById("m_mrp").value)||0,
+    minimum_stock: parseFloat(document.getElementById("m_minstock").value)||0,
+    tax_category: document.getElementById("m_tax").value || null, status: "active",
+  });
+  if (error) { status.innerHTML = `<span style="color:var(--signal-critical)">${error.message}</span>`; return; }
+  status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Saved.</span>`;
+  document.getElementById("addMedForm").style.display = "none";
+  await dzSearchMedicines();
+}
+
+let dzSearchTimer = null;
+function dzSearchMedicines() {
+  clearTimeout(dzSearchTimer);
+  dzSearchTimer = setTimeout(async () => {
+    const q = document.getElementById("medSearch")?.value.trim() || "";
+    let query = window.dzSupabase.from("distro_medicines").select("*").eq("organization_id", dzOrgId).order("product_name");
+    if (q) query = query.or(`product_name.ilike.%${q}%,generic_name.ilike.%${q}%,brand_name.ilike.%${q}%`);
+    const { data, error } = await query.limit(50);
+    const host = document.getElementById("medicineList");
+    if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+    if (!data || !data.length) { host.innerHTML = dzEmptyState("💊","No medicines yet","Add your first medicine above."); return; }
+    host.innerHTML = `<table><thead><tr><th>Name</th><th>Company</th><th>Packing</th><th>Purchase</th><th>Trade</th><th>MRP</th><th>Min Stock</th><th>Status</th></tr></thead>
+      <tbody>${data.map(m => `<tr>
+        <td><b>${dzEsc(m.product_name)}</b>${m.generic_name?'<div style="font-size:10.5px;color:var(--slate-500)">'+dzEsc(m.generic_name)+'</div>':''}</td>
+        <td>${dzEsc(m.company)||'-'}</td><td>${dzEsc(m.packing)||'-'}</td>
+        <td>${(m.default_purchase_rate||0).toFixed(2)}</td><td>${(m.default_trade_rate||0).toFixed(2)}</td><td>${(m.mrp||0).toFixed(2)}</td>
+        <td>${m.minimum_stock||0}</td><td><span class="dz-badge ${m.status==='active'?'live':'soon'}">${m.status}</span></td>
+      </tr>`).join("")}</tbody></table>`;
+  }, 250);
+}
+
+function dzToggleAddBatch() {
+  const host = document.getElementById("addBatchForm");
+  if (host.style.display === "block") { host.style.display = "none"; return; }
+  host.style.display = "block";
+  window.dzSupabase.from("distro_medicines").select("id, product_name").eq("organization_id",dzOrgId).eq("status","active").then(({data}) => {
+    host.innerHTML = `
+      <div class="grid3">
+        <div class="fld"><label>Medicine *</label><select id="b_medicine">${(data||[]).map(m=>`<option value="${m.id}">${dzEsc(m.product_name)}</option>`).join("")}</select></div>
+        <div class="fld"><label>Batch Number</label><input id="b_batch"></div>
+        <div class="fld"><label>Expiry Date *</label><input id="b_expiry" type="date"></div>
+        <div class="fld"><label>Manufacturing Date</label><input id="b_mfg" type="date"></div>
+        <div class="fld"><label>Quantity Received</label><input id="b_qty" type="number"></div>
+        <div class="fld"><label>Bonus Quantity</label><input id="b_bonus" type="number"></div>
+        <div class="fld"><label>Purchase Rate</label><input id="b_prate" type="number"></div>
+        <div class="fld"><label>Trade Rate</label><input id="b_trate" type="number"></div>
+        <div class="fld"><label>MRP</label><input id="b_mrp" type="number"></div>
+      </div>
+      <button class="primary-btn" onclick="dzSaveBatch()">Save Batch</button>
+      <span id="batchSaveStatus" style="margin-left:8px;font-size:12px"></span>`;
+  });
+}
+
+async function dzSaveBatch() {
+  const status = document.getElementById("batchSaveStatus");
+  const medicineId = document.getElementById("b_medicine").value;
+  const expiry = document.getElementById("b_expiry").value;
+  if (!medicineId || !expiry) { status.innerHTML = `<span style="color:var(--signal-critical)">Medicine and expiry date are required.</span>`; return; }
+  const qty = parseFloat(document.getElementById("b_qty").value)||0;
+  const { error } = await window.dzSupabase.from("distro_batches").insert({
+    organization_id: dzOrgId, medicine_id: medicineId, batch_number: document.getElementById("b_batch").value || null,
+    expiry_date: expiry, manufacturing_date: document.getElementById("b_mfg").value || null,
+    quantity_received: qty, bonus_quantity: parseFloat(document.getElementById("b_bonus").value)||0,
+    current_quantity: qty, purchase_rate: parseFloat(document.getElementById("b_prate").value)||0,
+    trade_rate: parseFloat(document.getElementById("b_trate").value)||0, mrp: parseFloat(document.getElementById("b_mrp").value)||0,
+    status: "active",
+  });
+  if (error) { status.innerHTML = `<span style="color:var(--signal-critical)">${error.message}</span>`; return; }
+  status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Saved.</span>`;
+  document.getElementById("addBatchForm").style.display = "none";
+  await dzLoadBatches();
+}
+
+async function dzLoadBatches() {
+  const host = document.getElementById("batchList");
+  const { data, error } = await window.dzSupabase.from("distro_batches").select("*, distro_medicines(product_name)").eq("organization_id",dzOrgId).gt("current_quantity",0).order("expiry_date");
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("📦","No batches yet","Add a batch above once you receive stock."); return; }
+  const today = new Date();
+  host.innerHTML = `<table><thead><tr><th>Medicine</th><th>Batch#</th><th>Expiry</th><th>Qty Available</th><th>Purchase Rate</th><th>Trade Rate</th><th>Status</th></tr></thead>
+    <tbody>${data.map(b => {
+      const days = Math.round((new Date(b.expiry_date)-today)/86400000);
+      const cls = days<0?'expired':days<=90?'soon':'ok';
+      const label = days<0?'EXPIRED':days<=90?days+'d left':'OK';
+      return `<tr><td>${dzEsc(b.distro_medicines?.product_name)}</td><td>${dzEsc(b.batch_number)||'-'}</td>
+        <td>${new Date(b.expiry_date).toLocaleDateString("en-GB")}</td><td>${b.current_quantity}</td>
+        <td>${(b.purchase_rate||0).toFixed(2)}</td><td>${(b.trade_rate||0).toFixed(2)}</td>
+        <td><span class="expiry-badge ${cls}">${label}</span></td></tr>`;
+    }).join("")}</tbody></table>`;
+}
+</script>
+</body>
+</html>
