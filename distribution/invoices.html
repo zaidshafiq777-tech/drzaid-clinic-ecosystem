@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Invoices — Distribution</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase;padding:7px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:6px;border-bottom:1px solid var(--slate-100)}
+  .fld{margin-bottom:10px}
+  .fld label{font-size:11.5px;font-weight:600;display:block;margin-bottom:4px}
+  .fld input,.fld select{width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px;box-sizing:border-box}
+  .lineRow{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr auto;gap:6px;margin-bottom:6px;align-items:center}
+  .st{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
+  .st.Unpaid{background:#FFF7E6;color:var(--signal-warning)}
+  .st.Paid{background:#E6F6EE;color:var(--signal-success)}
+  .st.Partial{background:#E8F1FB;color:var(--signal-info)}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null, dzLineItems = [];
+(async () => {
+  const session = await requireRole(null);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "distribution", title: "Invoices", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">Sales Invoices</h2>
+        <button class="primary-btn" onclick="dzToggleNewInvoice()">+ New Invoice</button>
+      </div>
+      <div id="newInvForm" style="display:none;background:var(--slate-50);border-radius:8px;padding:14px;margin:14px 0"></div>
+      <div id="invoiceList" style="margin-top:14px">Loading…</div>
+    </div>`;
+  await dzLoadInvoices();
+})();
+
+async function dzToggleNewInvoice() {
+  const host = document.getElementById("newInvForm");
+  if (host.style.display === "block") { host.style.display = "none"; return; }
+  host.style.display = "block";
+  const [{data:retailers},{data:medicines}] = await Promise.all([
+    window.dzSupabase.from("distro_retailers").select("id,shop_name").eq("organization_id",dzOrgId).eq("status","active"),
+    window.dzSupabase.from("distro_medicines").select("id,product_name,default_trade_rate,mrp,tax_category").eq("organization_id",dzOrgId).eq("status","active"),
+  ]);
+  window._dzInvMedicines = medicines || [];
+  dzLineItems = [{medicine_id:"",quantity:1,rate:0,mrp:0,discount_percent:0,gst_rate:0}];
+  host.innerHTML = `
+    <div class="fld"><label>Retailer *</label><select id="inv_retailer"><option value="">Select…</option>${(retailers||[]).map(r=>`<option value="${r.id}">${dzEsc(r.shop_name)}</option>`).join("")}</select></div>
+    <div id="lineItemsHost"></div>
+    <button class="ghost-refresh" onclick="dzAddLineItem()">+ Add Line</button>
+    <div id="invTotalPreview" style="margin-top:10px;font-weight:700"></div>
+    <button class="primary-btn" style="margin-top:10px" onclick="dzSaveInvoice()">Save Invoice</button>
+    <span id="invSaveStatus" style="margin-left:8px;font-size:12px"></span>`;
+  dzRenderLineItems();
+}
+
+function dzAddLineItem() { dzLineItems.push({medicine_id:"",quantity:1,rate:0,mrp:0,discount_percent:0,gst_rate:0}); dzRenderLineItems(); }
+function dzRenderLineItems() {
+  const host = document.getElementById("lineItemsHost");
+  const meds = window._dzInvMedicines || [];
+  host.innerHTML = dzLineItems.map((li,i) => `
+    <div class="lineRow">
+      <select onchange="dzUpdateLine(${i},'medicine_id',this.value)">
+        <option value="">Medicine…</option>
+        ${meds.map(m=>`<option value="${m.id}" ${li.medicine_id===m.id?'selected':''}>${dzEsc(m.product_name)}</option>`).join("")}
+      </select>
+      <input type="number" placeholder="Qty" value="${li.quantity}" onchange="dzUpdateLine(${i},'quantity',this.value)">
+      <input type="number" placeholder="Rate" value="${li.rate}" onchange="dzUpdateLine(${i},'rate',this.value)">
+      <input type="number" placeholder="Disc%" value="${li.discount_percent}" onchange="dzUpdateLine(${i},'discount_percent',this.value)">
+      <input type="number" placeholder="GST%" value="${li.gst_rate}" onchange="dzUpdateLine(${i},'gst_rate',this.value)">
+      <button onclick="dzRemoveLine(${i})" style="background:#FDECEC;color:var(--signal-critical);border:none;border-radius:6px;padding:6px">✕</button>
+    </div>`).join("");
+  dzUpdateTotalPreview();
+}
+function dzUpdateLine(i, field, val) {
+  dzLineItems[i][field] = field==='medicine_id' ? val : parseFloat(val)||0;
+  if (field==='medicine_id') {
+    const m = (window._dzInvMedicines||[]).find(x=>x.id===val);
+    if (m) { dzLineItems[i].rate = m.default_trade_rate||0; dzLineItems[i].mrp = m.mrp||0; dzRenderLineItems(); return; }
+  }
+  dzUpdateTotalPreview();
+}
+function dzRemoveLine(i) { dzLineItems.splice(i,1); dzRenderLineItems(); }
+function dzUpdateTotalPreview() {
+  let subtotal=0, tax=0;
+  dzLineItems.forEach(li => {
+    const taxable = (li.quantity||0)*(li.rate||0)*(1-(li.discount_percent||0)/100);
+    subtotal += taxable; tax += taxable*(li.gst_rate||0)/100;
+  });
+  document.getElementById("invTotalPreview").textContent = `Subtotal: Rs ${subtotal.toFixed(2)} + Tax: Rs ${tax.toFixed(2)} = Total: Rs ${(subtotal+tax).toFixed(2)}`;
+}
+
+async function dzSaveInvoice() {
+  const status = document.getElementById("invSaveStatus");
+  const retailerId = document.getElementById("inv_retailer").value;
+  if (!retailerId) { status.innerHTML = `<span style="color:var(--signal-critical)">Select a retailer.</span>`; return; }
+  const validLines = dzLineItems.filter(li => li.medicine_id && li.quantity > 0);
+  if (!validLines.length) { status.innerHTML = `<span style="color:var(--signal-critical)">Add at least one medicine line.</span>`; return; }
+
+  let subtotal=0, tax=0;
+  validLines.forEach(li => { const t=(li.quantity||0)*(li.rate||0)*(1-(li.discount_percent||0)/100); subtotal+=t; tax+=t*(li.gst_rate||0)/100; });
+  const total = subtotal + tax;
+
+  const { count } = await window.dzSupabase.from("distro_invoices").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId);
+  const docNumber = "INV-" + String((count||0)+1).padStart(5,"0");
+
+  const { data: inv, error } = await window.dzSupabase.from("distro_invoices").insert({
+    organization_id: dzOrgId, retailer_id: retailerId, document_type: "Sales Invoice",
+    document_number: docNumber, invoice_number_display: docNumber, status: "Unpaid",
+    subtotal, discount: 0, tax, total_amount: total, net_payable: total,
+    sgst_amount: tax/2, cgst_amount: tax/2,
+  }).select("id").single();
+  if (error) { status.innerHTML = `<span style="color:var(--signal-critical)">${error.message}</span>`; return; }
+
+  const meds = window._dzInvMedicines || [];
+  await window.dzSupabase.from("distro_invoice_items").insert(validLines.map((li,i) => {
+    const m = meds.find(x=>x.id===li.medicine_id);
+    return { organization_id: dzOrgId, invoice_id: inv.id, medicine_id: li.medicine_id, product_name: m?.product_name,
+      quantity: li.quantity, rate: li.rate, mrp: li.mrp, discount_percent: li.discount_percent, gst_rate: li.gst_rate,
+      tax: (li.quantity*li.rate*(1-li.discount_percent/100))*li.gst_rate/100,
+      total: li.quantity*li.rate*(1-li.discount_percent/100)*(1+li.gst_rate/100), sr_no: i+1 };
+  }));
+
+  status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Invoice ${docNumber} created.</span>`;
+  document.getElementById("newInvForm").style.display = "none";
+  await dzLoadInvoices();
+}
+
+async function dzLoadInvoices() {
+  const host = document.getElementById("invoiceList");
+  const { data, error } = await window.dzSupabase.from("distro_invoices").select("*, distro_retailers(shop_name)").eq("organization_id",dzOrgId).order("created_at",{ascending:false});
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("🧾","No invoices yet","Create your first invoice above."); return; }
+  host.innerHTML = `<table><thead><tr><th>Invoice#</th><th>Retailer</th><th>Date</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>${data.map(i => `<tr>
+      <td>${dzEsc(i.document_number)}</td><td>${dzEsc(i.distro_retailers?.shop_name)}</td>
+      <td>${new Date(i.created_at).toLocaleDateString("en-GB")}</td><td>Rs ${(i.total_amount||0).toLocaleString()}</td>
+      <td><span class="st ${i.status}">${i.status}</span></td>
+      <td><a href="invoice-print.html?id=${i.id}" target="_blank" style="color:var(--clinical-700);font-weight:600">Print</a></td>
+    </tr>`).join("")}</tbody></table>`;
+}
+</script>
+</body>
+</html>
