@@ -44,7 +44,12 @@
   dzCommandBarInit(session.profile);
   dzCopilotInit(session.profile);
 
-  document.getElementById("dz-content").innerHTML = `<div id="distribution-root"></div>`;
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel" style="padding:10px 14px;margin-bottom:14px">
+      <div id="distroSubNav" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+    </div>
+    <div id="distribution-root"></div>`;
+  dzRenderDistroSubNav(new URLSearchParams(window.location.search).get("view") || "dashboard");
 
   // Load React 19 + the compiled Distribution bundle.
   window.__DZ_EMBEDDED__ = true;
@@ -65,9 +70,47 @@
 
   const s3 = document.createElement("script");
   s3.type = "module";
-  s3.src = "dist/assets/index-CPsPS2zS.js";
+  s3.src = "dist/assets/index-pArmJRWF.js";
   document.body.appendChild(s3);
 })();
+
+// PART 1 — real main-sidebar-driven navigation for Distribution sub-modules.
+// These call the bridge function exposed by the React app (once mounted)
+// instead of a full page reload, matching real internal view names.
+const DZ_DISTRO_VIEWS = [
+  { key: "dashboard", label: "Dashboard" },
+  { key: "medicines", label: "Medicines / Suppliers / Retailers" },
+  { key: "batches", label: "Stock / Batches" },
+  { key: "ledger", label: "Stock Ledger" },
+  { key: "parser", label: "AI Order Parser" },
+  { key: "invoices", label: "Invoices" },
+  { key: "dispatch", label: "Dispatch" },
+  { key: "receivables", label: "Recovery" },
+  { key: "approvals", label: "Approvals" },
+  { key: "expiry", label: "Expiry Radar" },
+  { key: "restock", label: "Smart Restock" },
+  { key: "readiness", label: "Reports / Readiness" },
+  { key: "settings", label: "Settings" },
+];
+
+function dzRenderDistroSubNav(activeView) {
+  const host = document.getElementById("distroSubNav");
+  if (!host) return;
+  host.innerHTML = DZ_DISTRO_VIEWS.map(v => `
+    <button onclick="dzGoDistroView('${v.key}')" style="padding:6px 12px;border-radius:7px;font-size:12px;font-weight:600;border:1px solid var(--slate-200);background:${v.key===activeView?'var(--clinical-700)':'#fff'};color:${v.key===activeView?'#fff':'var(--slate-700)'}">${v.label}</button>
+  `).join("");
+}
+
+function dzGoDistroView(view) {
+  if (typeof window.__DZ_DISTRIBUTION_SET_VIEW__ === "function") {
+    window.__DZ_DISTRIBUTION_SET_VIEW__(view);
+    dzRenderDistroSubNav(view);
+    history.replaceState({}, "", window.location.pathname + "?view=" + view);
+  } else {
+    // App not mounted yet (race condition safety) - reload with the view param.
+    window.location.href = "dashboard.html?view=" + view;
+  }
+}
 </script>
 </body>
 </html>
