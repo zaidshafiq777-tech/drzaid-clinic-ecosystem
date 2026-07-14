@@ -144,16 +144,63 @@ async function dzRunOrderParser() {
 
   const d = r.data;
   const matchedRetailer = dzRetailerCache.find(rt => rt.shop_name.toLowerCase().includes((d.retailer||"").toLowerCase()));
+  window._dzParsedOrder = { data: d, matchedRetailer, rawText: text };
   resultHost.innerHTML = `
     <div style="background:var(--slate-50);border-radius:8px;padding:12px;font-size:12.5px">
-      <div><b>Retailer:</b> ${dzEsc(d.retailer)||'Not identified'} ${matchedRetailer?'<span style="color:var(--signal-success)">✓ matched</span>':'<span style="color:var(--signal-warning)">⚠ not found in system</span>'}</div>
+      <div><b>Retailer:</b> ${dzEsc(d.retailer)||'Not identified'} ${matchedRetailer?'<span style="color:var(--signal-success)">✓ matched</span>':'<span style="color:var(--signal-warning)">⚠ not found in system - cannot create order</span>'}</div>
       <div style="margin-top:8px"><b>Items:</b></div>
       <table style="margin-top:4px"><thead><tr><th>Raw Text</th><th>Matched Medicine</th><th>Qty</th><th>Confidence</th></tr></thead>
       <tbody>${(d.items||[]).map(i => `<tr><td>${dzEsc(i.rawName)}</td><td>${dzEsc(i.matchedMedicineName)||'<span style="color:var(--signal-warning)">Not matched</span>'}</td><td>${i.quantity} ${dzEsc(i.unit)||''}</td><td>${Math.round((i.confidence||0)*100)}%</td></tr>`).join("")}</tbody></table>
       ${(d.warnings||[]).length ? `<div style="color:var(--signal-warning);margin-top:6px">⚠ ${d.warnings.map(dzEsc).join("; ")}</div>` : ''}
-      <div style="font-size:11px;color:var(--slate-500);margin-top:8px">This is a DRAFT only — nothing is saved yet. Review before confirming.</div>
-      <button class="primary-btn" style="margin-top:8px" onclick="alert('Order creation from parsed draft — coming in the next increment. For now, use this to quickly identify items/quantities, then verify manually.')">Confirm &amp; Create Order (draft only for now)</button>
+      <div style="font-size:11px;color:var(--slate-500);margin-top:8px">This is a DRAFT — review before confirming. Only matched items with confidence ≥ 60% will be included.</div>
+      <button class="primary-btn" style="margin-top:8px" ${matchedRetailer?'':'disabled'} onclick="dzConfirmAndCreateOrder()">Confirm &amp; Create Order</button>
     </div>`;
+}
+
+/** Real order creation from the AI-parsed draft. Checks Credit Risk first -
+ *  if HIGH/CRITICAL, the order goes to Approvals instead of being created
+ *  directly (per "AI must not bypass approvals" rule). */
+async function dzConfirmAndCreateOrder() {
+  const parsed = window._dzParsedOrder;
+  if (!parsed || !parsed.matchedRetailer) return;
+  const validItems = (parsed.data.items||[]).filter(i => i.matchedMedicineName && (i.confidence||0) >= 0.6);
+  if (!validItems.length) { alert("No confidently-matched items to order."); return; }
+
+  const risk = dzAssessCreditRisk(parsed.matchedRetailer, []);
+  const meds = dzMedicineCache;
+  const orderItemsData = validItems.map(i => {
+    const m = meds.find(mm => mm.product_name.toLowerCase() === i.matchedMedicineName.toLowerCase());
+    return { medicine_id: m?.id, qty: i.quantity, unit_price: 0 };
+  }).filter(x => x.medicine_id);
+
+  const { count } = await window.dzSupabase.from("distro_orders").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId);
+  const orderNumber = "ORD-" + String((count||0)+1).padStart(5,"0");
+  const me = (await window.dzSupabase.auth.getUser()).data.user.id;
+
+  const { data: order, error } = await window.dzSupabase.from("distro_orders").insert({
+    organization_id: dzOrgId, retailer_id: parsed.matchedRetailer.id, order_number: orderNumber,
+    status: risk.blocksNewOrder ? "credit_hold" : "pending", source: "ai_parser",
+    raw_order_text: parsed.rawText, created_by: me,
+  }).select("id").single();
+  if (error) { alert("Failed: " + error.message); return; }
+
+  await window.dzSupabase.from("distro_order_items").insert(orderItemsData.map(x => ({
+    organization_id: dzOrgId, order_id: order.id, medicine_id: x.medicine_id, qty: x.qty, unit_price: x.unit_price,
+  })));
+
+  if (risk.blocksNewOrder) {
+    await window.dzSupabase.from("distro_approvals").insert({
+      organization_id: dzOrgId, action_type: "Blocked Order - Credit Risk", risk_level: risk.risk,
+      status: "Pending", related_id: order.id,
+      decision_note: `Order ${orderNumber} for ${parsed.matchedRetailer.shop_name} blocked - ${risk.risk} credit risk (${risk.utilizationPct}% of limit used, ${risk.maxOverdueDays}d overdue).`,
+      source: "ai",
+    });
+    alert(`Order ${orderNumber} created but is ON CREDIT HOLD (${risk.risk} risk) - sent to Approvals for owner review.`);
+  } else {
+    alert(`Order ${orderNumber} created successfully.`);
+  }
+  document.getElementById("orderText").value = "";
+  document.getElementById("parserResult").innerHTML = "";
 }
 </script>
 </body>
