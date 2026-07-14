@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Brokers — Distribution</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase;padding:7px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:6px;border-bottom:1px solid var(--slate-100)}
+  .fld{margin-bottom:10px}
+  .fld label{font-size:11.5px;font-weight:600;display:block;margin-bottom:4px}
+  .fld input{width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px;box-sizing:border-box}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null;
+(async () => {
+  const session = await requireRole(null);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "distribution", title: "Brokers", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">Brokers / Sales Representatives</h2>
+        <button class="primary-btn" onclick="dzToggleAddBroker()">+ Add Broker</button>
+      </div>
+      <div id="addBrokerForm" style="display:none;background:var(--slate-50);border-radius:8px;padding:14px;margin:14px 0"></div>
+      <div id="brokerList" style="margin-top:14px">Loading…</div>
+    </div>`;
+  await dzLoadBrokers();
+})();
+
+function dzToggleAddBroker() {
+  const host = document.getElementById("addBrokerForm");
+  if (host.style.display === "block") { host.style.display = "none"; return; }
+  host.style.display = "block";
+  host.innerHTML = `
+    <div class="grid3">
+      <div class="fld"><label>Name *</label><input id="br_name"></div>
+      <div class="fld"><label>Phone</label><input id="br_phone"></div>
+      <div class="fld"><label>Area / Route</label><input id="br_area"></div>
+      <div class="fld"><label>Commission %</label><input id="br_commission" type="number" placeholder="e.g. 5"></div>
+    </div>
+    <button class="primary-btn" onclick="dzSaveBroker()">Save Broker</button>
+    <span id="brokerSaveStatus" style="margin-left:8px;font-size:12px"></span>`;
+}
+
+async function dzSaveBroker() {
+  const status = document.getElementById("brokerSaveStatus");
+  const name = document.getElementById("br_name").value.trim();
+  if (!name) { status.innerHTML = `<span style="color:var(--signal-critical)">Name is required.</span>`; return; }
+  const commission = document.getElementById("br_commission").value || "5";
+  const { error } = await window.dzSupabase.from("distro_brokers").insert({
+    organization_id: dzOrgId, name, phone: document.getElementById("br_phone").value || null,
+    area: document.getElementById("br_area").value || null, commission_type: commission + "%", status: "active",
+  });
+  if (error) { status.innerHTML = `<span style="color:var(--signal-critical)">${error.message}</span>`; return; }
+  status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Saved.</span>`;
+  document.getElementById("addBrokerForm").style.display = "none";
+  await dzLoadBrokers();
+}
+
+async function dzLoadBrokers() {
+  const host = document.getElementById("brokerList");
+  const [{data:brokers,error},{data:retailers}] = await Promise.all([
+    window.dzSupabase.from("distro_brokers").select("*").eq("organization_id",dzOrgId).order("name"),
+    window.dzSupabase.from("distro_retailers").select("id").eq("organization_id",dzOrgId), // future: assigned_broker_id linkage
+  ]);
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!brokers || !brokers.length) { host.innerHTML = dzEmptyState("🧑‍💼","No brokers yet","Add your first broker/sales rep above."); return; }
+  host.innerHTML = `<table><thead><tr><th>Name</th><th>Phone</th><th>Area</th><th>Commission</th><th>Status</th></tr></thead>
+    <tbody>${brokers.map(b => `<tr><td><b>${dzEsc(b.name)}</b></td><td>${dzEsc(b.phone)||'-'}</td><td>${dzEsc(b.area)||'-'}</td>
+      <td>${dzEsc(b.commission_type)||'-'}</td><td><span class="dz-badge ${b.status==='active'?'live':'soon'}">${b.status}</span></td></tr>`).join("")}</tbody></table>`;
+}
+</script>
+</body>
+</html>
