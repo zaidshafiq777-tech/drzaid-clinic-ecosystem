@@ -1,5 +1,5 @@
 // Dr. Zaid Healthcare OS — Service Worker (Milestone 12 - cache-bug fix)
-const CACHE_NAME = "drzaid-os-v13-realtime-queue";
+const CACHE_NAME = "drzaid-os-v14-distro-url-fix";
 const APP_SHELL = [
   "shared/login.html",
   "shared/theme.css",
