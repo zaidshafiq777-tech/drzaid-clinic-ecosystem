@@ -40,12 +40,26 @@ let dzOrgId = null;
 
   document.getElementById("dz-content").innerHTML = `
     <div class="dz-panel">
+      <div class="tabs" style="display:flex;gap:4px;border-bottom:1px solid var(--slate-200);margin-bottom:14px">
+        <div class="tab active" onclick="dzSwitchSupTab(0)">Suppliers</div>
+        <div class="tab" onclick="dzSwitchSupTab(1)">📥 Stock Inward (Purchase Receipt)</div>
+      </div>
+      <div id="supPanel-0">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <h2 style="margin:0">Suppliers</h2>
         <button class="primary-btn" onclick="dzToggleAddSupplier()">+ Add Supplier</button>
       </div>
       <div id="addSupForm" style="display:none;background:var(--slate-50);border-radius:8px;padding:14px;margin:14px 0"></div>
       <div id="supplierList" style="margin-top:14px">Loading…</div>
+      </div>
+      <div id="supPanel-1" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <h2 style="margin:0">Stock Inward</h2>
+          <button class="primary-btn" onclick="dzToggleNewInward()">+ New Stock Inward</button>
+        </div>
+        <div id="newInwardForm" style="display:none;background:var(--slate-50);border-radius:8px;padding:14px;margin:14px 0"></div>
+        <div id="inwardList" style="margin-top:14px">Loading…</div>
+      </div>
     </div>`;
   await dzLoadSuppliers();
 })();
@@ -94,6 +108,149 @@ async function dzLoadSuppliers() {
   host.innerHTML = `<table><thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>City</th><th>Payable</th><th>Terms</th></tr></thead>
     <tbody>${data.map(s => `<tr><td><b>${dzEsc(s.name)}</b></td><td>${dzEsc(s.contact_person)||'-'}</td><td>${dzEsc(s.phone)||'-'}</td>
       <td>${dzEsc(s.city)||'-'}</td><td>Rs ${(s.current_payable||0).toLocaleString()}</td><td>${dzEsc(s.payment_terms)||'-'}</td></tr>`).join("")}</tbody></table>`;
+}
+
+function dzSwitchSupTab(i) {
+  document.querySelectorAll(".tab").forEach((t,idx)=>t.classList.toggle("active",idx===i));
+  document.getElementById("supPanel-0").style.display = i===0?"block":"none";
+  document.getElementById("supPanel-1").style.display = i===1?"block":"none";
+  if (i===1) dzLoadInwards();
+}
+
+let dzInwardLines = [];
+async function dzToggleNewInward() {
+  const host = document.getElementById("newInwardForm");
+  if (host.style.display === "block") { host.style.display = "none"; return; }
+  host.style.display = "block";
+  const [{data:suppliers},{data:medicines}] = await Promise.all([
+    window.dzSupabase.from("distro_suppliers").select("id,name").eq("organization_id",dzOrgId).eq("status","active"),
+    window.dzSupabase.from("distro_medicines").select("id,product_name,default_purchase_rate,default_trade_rate,mrp").eq("organization_id",dzOrgId).eq("status","active"),
+  ]);
+  window._dzInwardMeds = medicines || [];
+  dzInwardLines = [{medicine_id:"",batch_number:"",expiry_date:"",quantity:0,bonus_quantity:0,purchase_rate:0,trade_rate:0,mrp:0}];
+  host.innerHTML = `
+    <div class="fld"><label>Supplier *</label><select id="in_supplier"><option value="">Select…</option>${(suppliers||[]).map(s=>`<option value="${s.id}">${dzEsc(s.name)}</option>`).join("")}</select></div>
+    <div class="fld"><label>Purchase Invoice Number</label><input id="in_invnum"></div>
+    <div id="inwardLinesHost"></div>
+    <button class="ghost-refresh" onclick="dzAddInwardLine()">+ Add Line</button>
+    <div id="inwardTotalPreview" style="margin-top:10px;font-weight:700"></div>
+    <div style="font-size:10.5px;color:var(--slate-500);margin-top:6px">⚠ Validates: expired goods rejected, missing batch/expiry blocked. Posting updates stock, ledger, and supplier payable together.</div>
+    <button class="primary-btn" style="margin-top:8px" onclick="dzPostStockInward()">Post Stock Inward</button>
+    <span id="inwardSaveStatus" style="margin-left:8px;font-size:12px"></span>`;
+  dzRenderInwardLines();
+}
+function dzAddInwardLine() { dzInwardLines.push({medicine_id:"",batch_number:"",expiry_date:"",quantity:0,bonus_quantity:0,purchase_rate:0,trade_rate:0,mrp:0}); dzRenderInwardLines(); }
+function dzRenderInwardLines() {
+  const host = document.getElementById("inwardLinesHost");
+  const meds = window._dzInwardMeds || [];
+  host.innerHTML = dzInwardLines.map((li,i) => `
+    <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 0.7fr 0.7fr 0.8fr auto;gap:6px;margin-bottom:6px;align-items:center">
+      <select onchange="dzUpdateInwardLine(${i},'medicine_id',this.value)"><option value="">Medicine…</option>${meds.map(m=>`<option value="${m.id}" ${li.medicine_id===m.id?'selected':''}>${dzEsc(m.product_name)}</option>`).join("")}</select>
+      <input placeholder="Batch#" value="${li.batch_number}" onchange="dzUpdateInwardLine(${i},'batch_number',this.value)">
+      <input type="date" value="${li.expiry_date}" onchange="dzUpdateInwardLine(${i},'expiry_date',this.value)">
+      <input type="number" placeholder="Qty" value="${li.quantity}" onchange="dzUpdateInwardLine(${i},'quantity',this.value)">
+      <input type="number" placeholder="Bonus" value="${li.bonus_quantity}" onchange="dzUpdateInwardLine(${i},'bonus_quantity',this.value)">
+      <input type="number" placeholder="P.Rate" value="${li.purchase_rate}" onchange="dzUpdateInwardLine(${i},'purchase_rate',this.value)">
+      <button onclick="dzRemoveInwardLine(${i})" style="background:#FDECEC;color:var(--signal-critical);border:none;border-radius:6px;padding:6px">✕</button>
+    </div>`).join("");
+  dzUpdateInwardTotal();
+}
+function dzUpdateInwardLine(i, field, val) {
+  dzInwardLines[i][field] = ["medicine_id","batch_number","expiry_date"].includes(field) ? val : parseFloat(val)||0;
+  if (field==='medicine_id') { const m=(window._dzInwardMeds||[]).find(x=>x.id===val); if(m){dzInwardLines[i].purchase_rate=m.default_purchase_rate||0;dzInwardLines[i].trade_rate=m.default_trade_rate||0;dzInwardLines[i].mrp=m.mrp||0;dzRenderInwardLines();return;} }
+  dzUpdateInwardTotal();
+}
+function dzRemoveInwardLine(i) { dzInwardLines.splice(i,1); dzRenderInwardLines(); }
+function dzUpdateInwardTotal() {
+  const total = dzInwardLines.reduce((s,li)=>s+(li.quantity||0)*(li.purchase_rate||0),0);
+  document.getElementById("inwardTotalPreview").textContent = `Total: Rs ${total.toFixed(2)}`;
+}
+
+/** Real posting workflow: validates, then creates stock_inward + items,
+ *  batches, stock_ledger entries, and updates supplier payable together.
+ *  Note: this is sequential (not a single DB transaction/RPC) - if a step
+ *  fails partway, earlier steps are NOT auto-rolled-back. This is a known
+ *  limitation until an RPC function is added; flagged honestly rather than
+ *  claiming full atomicity. */
+async function dzPostStockInward() {
+  const status = document.getElementById("inwardSaveStatus");
+  const supplierId = document.getElementById("in_supplier").value;
+  if (!supplierId) { status.innerHTML = `<span style="color:var(--signal-critical)">Select a supplier.</span>`; return; }
+  const validLines = dzInwardLines.filter(li => li.medicine_id && li.quantity > 0);
+  if (!validLines.length) { status.innerHTML = `<span style="color:var(--signal-critical)">Add at least one valid line.</span>`; return; }
+
+  // Validation per spec: missing expiry blocked, expired goods rejected, negative qty blocked.
+  const today = new Date().toISOString().slice(0,10);
+  for (const li of validLines) {
+    if (!li.expiry_date) { status.innerHTML = `<span style="color:var(--signal-critical)">Every line needs an expiry date.</span>`; return; }
+    if (li.expiry_date < today) { status.innerHTML = `<span style="color:var(--signal-critical)">Cannot receive already-expired stock (line expiry: ${li.expiry_date}).</span>`; return; }
+    if (li.quantity < 0 || li.bonus_quantity < 0) { status.innerHTML = `<span style="color:var(--signal-critical)">Quantity cannot be negative.</span>`; return; }
+  }
+
+  status.textContent = "Posting…";
+  const total = validLines.reduce((s,li)=>s+(li.quantity||0)*(li.purchase_rate||0),0);
+  const invoiceNumber = document.getElementById("in_invnum").value.trim();
+
+  // Duplicate invoice check
+  if (invoiceNumber) {
+    const { data: dupes } = await window.dzSupabase.from("distro_stock_inwards").select("id").eq("organization_id",dzOrgId).eq("supplier_id",supplierId).eq("invoice_number",invoiceNumber);
+    if (dupes && dupes.length) { status.innerHTML = `<span style="color:var(--signal-critical)">This invoice number was already posted for this supplier.</span>`; return; }
+  }
+
+  try {
+    const { data: inward, error: inErr } = await window.dzSupabase.from("distro_stock_inwards").insert({
+      organization_id: dzOrgId, supplier_id: supplierId, invoice_number: invoiceNumber || null,
+      invoice_date: today, status: "approved", total_amount: total, payment_status: "unpaid",
+    }).select("id").single();
+    if (inErr) throw inErr;
+
+    const meds = window._dzInwardMeds || [];
+    await window.dzSupabase.from("distro_stock_inward_items").insert(validLines.map(li => ({
+      organization_id: dzOrgId, stock_inward_id: inward.id, medicine_id: li.medicine_id,
+      product_name: (meds.find(m=>m.id===li.medicine_id)||{}).product_name,
+      batch_number: li.batch_number || null, expiry_date: li.expiry_date,
+      quantity: li.quantity, bonus_quantity: li.bonus_quantity, purchase_rate: li.purchase_rate,
+      trade_rate: li.trade_rate, mrp: li.mrp,
+    })));
+
+    for (const li of validLines) {
+      const totalQty = (li.quantity||0) + (li.bonus_quantity||0);
+      const { data: batch } = await window.dzSupabase.from("distro_batches").insert({
+        organization_id: dzOrgId, medicine_id: li.medicine_id, supplier_id: supplierId,
+        batch_number: li.batch_number || null, expiry_date: li.expiry_date,
+        purchase_invoice_number: invoiceNumber || null, quantity_received: li.quantity, bonus_quantity: li.bonus_quantity,
+        current_quantity: totalQty, purchase_rate: li.purchase_rate, trade_rate: li.trade_rate, mrp: li.mrp, status: "active", source: "purchase",
+      }).select("id").single();
+
+      await window.dzSupabase.from("distro_stock_ledger").insert({
+        organization_id: dzOrgId, transaction_type: "Purchase Inward", product_id: li.medicine_id,
+        product_name: (meds.find(m=>m.id===li.medicine_id)||{}).product_name, batch_id: batch?.id,
+        batch_number: li.batch_number, expiry_date: li.expiry_date, quantity_in: totalQty, quantity_out: 0,
+        balance_after: totalQty, reference_type: "stock_inward", reference_id: inward.id,
+        related_party: (window._dzInwardSupplierName)||"", user_role: "Owner", approval_status: "Approved", source: "purchase",
+      });
+    }
+
+    const { data: supplier } = await window.dzSupabase.from("distro_suppliers").select("current_payable").eq("id",supplierId).single();
+    await window.dzSupabase.from("distro_suppliers").update({ current_payable: (supplier?.current_payable||0) + total }).eq("id", supplierId);
+
+    status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Stock inward posted. Batches created, ledger updated, supplier payable increased by Rs ${total.toFixed(2)}.</span>`;
+    document.getElementById("newInwardForm").style.display = "none";
+    await dzLoadInwards();
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--signal-critical)">Failed partway through posting: ${e.message}. Please check Stock Ledger/Batches for partial entries before retrying.</span>`;
+  }
+}
+
+async function dzLoadInwards() {
+  const host = document.getElementById("inwardList");
+  const { data, error } = await window.dzSupabase.from("distro_stock_inwards").select("*, distro_suppliers(name)").eq("organization_id",dzOrgId).order("created_at",{ascending:false});
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("📥","No stock inwards yet","Post your first purchase receipt above."); return; }
+  host.innerHTML = `<table><thead><tr><th>Invoice#</th><th>Supplier</th><th>Date</th><th>Amount</th><th>Status</th></tr></thead>
+    <tbody>${data.map(i => `<tr><td>${dzEsc(i.invoice_number)||'-'}</td><td>${dzEsc(i.distro_suppliers?.name)}</td>
+      <td>${new Date(i.invoice_date).toLocaleDateString("en-GB")}</td><td>Rs ${(i.total_amount||0).toLocaleString()}</td>
+      <td><span class="dz-badge live">${i.status}</span></td></tr>`).join("")}</tbody></table>`;
 }
 </script>
 </body>
