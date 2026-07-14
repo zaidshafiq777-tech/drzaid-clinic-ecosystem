@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Approvals — Distribution</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  .risk-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
+  .risk-LOW{background:#E6F6EE;color:var(--signal-success)}
+  .risk-MEDIUM{background:#FFF7E6;color:var(--signal-warning)}
+  .risk-HIGH,.risk-CRITICAL{background:#FDECEC;color:var(--signal-critical)}
+  .btn{padding:6px 12px;border:none;border-radius:6px;font-size:11.5px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null;
+(async () => {
+  const session = await requireRole(null);
+  if (!session) return;
+  const isOwnerTier = ["org_owner","branch_admin","super_admin"].includes(session.profile.role);
+  if (!isOwnerTier) { alert("Only the owner can review approvals."); window.location.href = "dashboard.html"; return; }
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "distribution", title: "Approvals", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <h2>⚠ Pending Approvals <span class="dz-badge live">Live</span></h2>
+      <div class="sub">Every high-risk action (credit-blocked orders, price overrides, write-offs) requires your explicit decision. AI never bypasses this.</div>
+      <div id="approvalsList" style="margin-top:12px">Loading…</div>
+    </div>`;
+  await dzLoadApprovals();
+})();
+
+async function dzLoadApprovals() {
+  const host = document.getElementById("approvalsList");
+  const { data, error } = await window.dzSupabase.from("distro_approvals").select("*").eq("organization_id",dzOrgId).eq("status","Pending").order("created_at",{ascending:false});
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("✓","No pending approvals","All clear — nothing is waiting for your decision."); return; }
+  host.innerHTML = data.map(a => `
+    <div style="border:1px solid var(--slate-200);border-radius:8px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><b>${dzEsc(a.action_type)}</b> <span class="risk-badge risk-${a.risk_level}">${a.risk_level}</span></div>
+        <div style="font-size:11px;color:var(--slate-500)">${new Date(a.created_at).toLocaleString()}</div>
+      </div>
+      <div style="font-size:12.5px;margin-top:6px">${dzEsc(a.decision_note)}</div>
+      <div style="margin-top:8px">
+        <button class="btn" style="background:#E6F6EE;color:var(--signal-success)" onclick="dzDecideApproval('${a.id}','Approved','${a.related_id}','${a.action_type}')">Approve</button>
+        <button class="btn" style="background:#FDECEC;color:var(--signal-critical)" onclick="dzDecideApproval('${a.id}','Rejected','${a.related_id}','${a.action_type}')">Reject</button>
+      </div>
+    </div>`).join("");
+}
+
+async function dzDecideApproval(approvalId, decision, relatedId, actionType) {
+  await window.dzSupabase.from("distro_approvals").update({ status: decision }).eq("id", approvalId);
+  // If this was a blocked order, release/cancel it based on the decision.
+  if (actionType.includes("Order") && relatedId && relatedId !== "null") {
+    await window.dzSupabase.from("distro_orders").update({ status: decision === "Approved" ? "pending" : "cancelled" }).eq("id", relatedId);
+  }
+  await dzLoadApprovals();
+}
+</script>
+</body>
+</html>
