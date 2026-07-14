@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dispatch &amp; Recovery — Distribution</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase;padding:7px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:6px;border-bottom:1px solid var(--slate-100)}
+  .tab{padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--slate-500);border-bottom:2px solid transparent;cursor:pointer}
+  .tab.active{color:var(--clinical-700);border-color:var(--clinical-700)}
+  .btn{padding:5px 10px;border:none;border-radius:6px;font-size:11px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/response-parser.js"></script>
+<script src="../shared/ai-manager.js"></script>
+<script src="../shared/distro-agent.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null;
+(async () => {
+  const session = await requireRole(null);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "distribution", title: "Dispatch &amp; Recovery", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <div class="tabs" style="display:flex;gap:4px;border-bottom:1px solid var(--slate-200);margin-bottom:14px">
+        <div class="tab active" onclick="dzSwitchTab(0)">Dispatch</div>
+        <div class="tab" onclick="dzSwitchTab(1)">💰 Recovery (Accounts)</div>
+      </div>
+      <div id="panel-0"><div id="dispatchList">Loading…</div></div>
+      <div id="panel-1" style="display:none"><div id="recoveryList">Loading…</div></div>
+    </div>`;
+  await dzLoadDispatch();
+})();
+
+function dzSwitchTab(i) {
+  document.querySelectorAll(".tab").forEach((t,idx)=>t.classList.toggle("active",idx===i));
+  document.getElementById("panel-0").style.display = i===0?"block":"none";
+  document.getElementById("panel-1").style.display = i===1?"block":"none";
+  if (i===1) dzLoadRecovery();
+}
+
+async function dzLoadDispatch() {
+  const host = document.getElementById("dispatchList");
+  // Show invoices ready for dispatch (approved, not yet dispatched)
+  const { data, error } = await window.dzSupabase.from("distro_invoices").select("*, distro_retailers(shop_name, area)").eq("organization_id",dzOrgId).in("status",["Unpaid","Partial"]).order("created_at",{ascending:false});
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("📦","No pending dispatches","Invoices ready for delivery appear here."); return; }
+  host.innerHTML = `<table><thead><tr><th>Invoice#</th><th>Retailer</th><th>Area</th><th>Amount</th><th>Actions</th></tr></thead>
+    <tbody>${data.map(i => `<tr>
+      <td>${dzEsc(i.document_number)}</td><td>${dzEsc(i.distro_retailers?.shop_name)}</td><td>${dzEsc(i.distro_retailers?.area)||'-'}</td>
+      <td>Rs ${(i.total_amount||0).toLocaleString()}</td>
+      <td><button class="btn" style="background:var(--clinical-700);color:#fff" onclick="dzCreateDispatch('${i.id}')">Mark Dispatched</button></td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+async function dzCreateDispatch(invoiceId) {
+  const { count } = await window.dzSupabase.from("distro_dispatches").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId);
+  await window.dzSupabase.from("distro_dispatches").insert({
+    organization_id: dzOrgId, invoice_id: invoiceId, dispatch_number: "DSP-"+String((count||0)+1).padStart(5,"0"),
+    status: "dispatched", dispatched_at: new Date().toISOString(),
+  });
+  alert("Marked as dispatched.");
+  await dzLoadDispatch();
+}
+
+async function dzLoadRecovery() {
+  const host = document.getElementById("recoveryList");
+  const { data: retailers } = await window.dzSupabase.from("distro_retailers").select("*").eq("organization_id",dzOrgId).gt("current_balance",0).order("current_balance",{ascending:false});
+  if (!retailers || !retailers.length) { host.innerHTML = dzEmptyState("✓","No outstanding balances","All retailer accounts are clear."); return; }
+  host.innerHTML = `<table><thead><tr><th>Retailer</th><th>Outstanding</th><th>Credit Limit</th><th>Risk</th><th>Actions</th></tr></thead>
+    <tbody>${retailers.map(r => {
+      const risk = dzAssessCreditRisk(r, []);
+      return `<tr><td>${dzEsc(r.shop_name)}</td><td>Rs ${(r.current_balance||0).toLocaleString()}</td><td>Rs ${(r.credit_limit||0).toLocaleString()}</td>
+        <td><span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;background:${risk.risk==='LOW'?'#E6F6EE':risk.risk==='MEDIUM'?'#FFF7E6':'#FDECEC'};color:${risk.risk==='LOW'?'var(--signal-success)':risk.risk==='MEDIUM'?'var(--signal-warning)':'var(--signal-critical)'}">${risk.risk}</span></td>
+        <td><button class="btn" style="background:var(--slate-100)" onclick="dzDraftReminder('${r.id}')">Draft Reminder</button></td>
+      </tr>`;
+    }).join("")}</tbody></table>
+    <div id="reminderDraft" style="margin-top:14px"></div>`;
+}
+
+async function dzDraftReminder(retailerId) {
+  const host = document.getElementById("reminderDraft");
+  host.innerHTML = `<div style="font-size:12px;color:var(--slate-500)">AI drafting…</div>`;
+  const { data: retailer } = await window.dzSupabase.from("distro_retailers").select("*").eq("id",retailerId).single();
+  const { data: invoice } = await window.dzSupabase.from("distro_invoices").select("*").eq("retailer_id",retailerId).eq("organization_id",dzOrgId).neq("status","Paid").order("created_at").limit(1).maybeSingle();
+  if (!invoice) { host.innerHTML = `<div style="font-size:12px;color:var(--slate-500)">No unpaid invoice found for this retailer.</div>`; return; }
+  const overdueDays = Math.max(0, Math.round((new Date() - new Date(invoice.created_at))/86400000) - 15);
+  const msg = await dzDraftRecoveryMessage(retailer, invoice, overdueDays, "polite");
+  host.innerHTML = `<div class="dz-panel" style="background:var(--slate-50)"><b>Draft reminder for ${dzEsc(retailer.shop_name)}:</b><p style="font-size:12.5px;margin-top:6px">${dzEsc(msg)}</p></div>`;
+}
+</script>
+</body>
+</html>
