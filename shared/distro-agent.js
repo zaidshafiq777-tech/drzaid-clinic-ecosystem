@@ -92,3 +92,56 @@ Data: ${JSON.stringify(stats)}`;
   const r = await AI.ask(prompt, { temperature: 0, taskType: "distro_owner_brief" });
   return r.ok ? r.text.trim() : "AI brief unavailable right now — review the dashboard numbers directly.";
 }
+
+/** Pricing Guard — real margin math, flags loss/low-margin/below-MRP sales. */
+function dzCheckPricingGuard(lineItem, minimumMarginPercent) {
+  const flags = [];
+  const rate = lineItem.rate || 0, purchaseRate = lineItem.purchase_rate || 0, mrp = lineItem.mrp || 0;
+  if (purchaseRate > 0) {
+    const marginPercent = ((rate - purchaseRate) / purchaseRate) * 100;
+    if (marginPercent < 0) flags.push({ level: "critical", text: `Loss-making sale: rate (${rate}) below purchase rate (${purchaseRate}).` });
+    else if (marginPercent < (minimumMarginPercent || 5)) flags.push({ level: "warning", text: `Low margin: ${marginPercent.toFixed(1)}% (below ${minimumMarginPercent||5}% minimum).` });
+  }
+  if (mrp > 0 && rate > mrp) flags.push({ level: "critical", text: `Rate (${rate}) exceeds MRP (${mrp}) - not permitted.` });
+  if ((lineItem.discount_percent || 0) > 25) flags.push({ level: "warning", text: `Unusually high discount: ${lineItem.discount_percent}%.` });
+  return flags;
+}
+
+/** Anomaly Agent — real pattern checks over recent transactions. Flags only,
+ *  never accuses; always phrased as "requires review". */
+function dzScanAnomalies(recentInvoices, recentLedger) {
+  const flags = [];
+  // Duplicate invoice numbers for the same retailer within a short window.
+  const seen = {};
+  recentInvoices.forEach(inv => {
+    const key = inv.retailer_id + "|" + inv.document_number;
+    if (seen[key]) flags.push({ level: "warning", text: `Possible duplicate invoice ${inv.document_number} - requires review.` });
+    seen[key] = true;
+  });
+  // Negative stock balances.
+  recentLedger.forEach(l => {
+    if ((l.balance_after || 0) < 0) flags.push({ level: "critical", text: `Negative stock balance detected for ${l.product_name || 'a medicine'} - requires review.` });
+  });
+  return flags;
+}
+
+/** Sales Opportunity Agent — real query-based: retailers who used to order
+ *  a medicine but haven't recently. */
+function dzFindSalesOpportunities(retailerOrderHistory, daysSinceThreshold) {
+  const today = new Date();
+  const opportunities = [];
+  const byRetailerMedicine = {};
+  retailerOrderHistory.forEach(o => {
+    const key = o.retailer_id + "|" + o.medicine_id;
+    if (!byRetailerMedicine[key] || new Date(o.created_at) > new Date(byRetailerMedicine[key].created_at)) {
+      byRetailerMedicine[key] = o;
+    }
+  });
+  Object.values(byRetailerMedicine).forEach(o => {
+    const daysSince = Math.round((today - new Date(o.created_at)) / 86400000);
+    if (daysSince >= (daysSinceThreshold || 45)) {
+      opportunities.push({ retailerName: o.retailer_name, medicineName: o.medicine_name, daysSinceLastOrder: daysSince });
+    }
+  });
+  return opportunities;
+}
