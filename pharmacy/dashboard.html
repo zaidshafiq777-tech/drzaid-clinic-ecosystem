@@ -60,6 +60,13 @@
       <div id="reportsHost"></div>
     </div>
     <div class="dz-panel">
+      <h2>🔄 Distribution Warehouse Transfer</h2>
+      <div class="sub">Request stock from the Distribution warehouse, or receive items already dispatched to you.</div>
+      <button class="ai-btn" style="background:var(--clinical-700);color:#fff;margin-top:8px" onclick="dzToggleRequisition()">+ Request from Distribution</button>
+      <div id="requisitionForm" style="display:none;background:var(--slate-50);border-radius:8px;padding:12px;margin-top:10px"></div>
+      <div id="pendingReceiveHost" style="margin-top:12px"></div>
+    </div>
+    <div class="dz-panel">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <h2 style="margin:0">Medicine Inventory</h2>
         <button class="ai-btn" style="background:var(--clinical-700);color:#fff" onclick="dzToggleAddMedicine()">+ Add New Medicine</button>
@@ -93,8 +100,84 @@
     </div>`;
   await dzLoadPharmMetrics();
   await dzLoadPharmQueue();
+  await dzLoadPendingReceive();
   dzStartPharmacyPolling();
 })();
+
+/** Clinic Pharmacy side of the transfer bridge. Request creates a real
+ *  requisition row for Distribution to approve/dispatch. Receive adds
+ *  real stock to the clinic's own medicine_batches + stock_ledger, using
+ *  the SAME medicine name matched by the pharmacist (kept as a separate,
+ *  simple location - clinic dispensing stock never silently merges with
+ *  warehouse stock, per integration rules). */
+function dzToggleRequisition() {
+  const host = document.getElementById("requisitionForm");
+  if (host.style.display === "block") { host.style.display = "none"; return; }
+  host.style.display = "block";
+  window.dzSupabase.from("distro_medicines").select("id,product_name").eq("organization_id", window.DZ_SESSION.profile.organization_id).eq("status","active").then(({data}) => {
+    host.innerHTML = `
+      <select id="reqMedicine" style="width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px;margin-bottom:8px">
+        <option value="">Select medicine from Distribution catalogue…</option>
+        ${(data||[]).map(m=>`<option value="${m.id}" data-name="${dzEscAttr(m.product_name)}">${m.product_name}</option>`).join("")}
+      </select>
+      <input id="reqQty" type="number" placeholder="Quantity needed" style="width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px;margin-bottom:8px">
+      <button class="ai-btn" style="background:var(--clinical-700);color:#fff" onclick="dzSubmitRequisition()">Submit Request</button>
+      <span id="reqStatus" style="margin-left:8px;font-size:12px"></span>`;
+  });
+}
+function dzEscAttr(s){return String(s||"").replace(/"/g,"&quot;");}
+
+async function dzSubmitRequisition() {
+  const status = document.getElementById("reqStatus");
+  const sel = document.getElementById("reqMedicine");
+  const medId = sel.value;
+  const medName = sel.selectedOptions[0]?.dataset.name;
+  const qty = parseInt(document.getElementById("reqQty").value, 10);
+  if (!medId || !qty || qty <= 0) { status.innerHTML = `<span style="color:var(--signal-critical)">Select a medicine and enter a valid quantity.</span>`; return; }
+  const me = (await window.dzSupabase.auth.getUser()).data.user.id;
+  const { error } = await window.dzSupabase.from("clinic_distro_transfers").insert({
+    organization_id: window.DZ_SESSION.profile.organization_id, distro_medicine_id: medId,
+    clinic_medicine_name: medName, quantity: qty, status: "requested", requested_by: me,
+  });
+  if (error) { status.innerHTML = `<span style="color:var(--signal-critical)">${error.message}</span>`; return; }
+  status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Requested. Distribution will review it.</span>`;
+  document.getElementById("requisitionForm").style.display = "none";
+}
+
+async function dzLoadPendingReceive() {
+  const host = document.getElementById("pendingReceiveHost");
+  const { data } = await window.dzSupabase.from("clinic_distro_transfers").select("*").eq("organization_id", window.DZ_SESSION.profile.organization_id).eq("status","dispatched");
+  if (!data || !data.length) { host.innerHTML = ""; return; }
+  host.innerHTML = `<div style="font-size:12px;font-weight:700;margin-bottom:6px">📬 Ready to Receive</div>` +
+    data.map(t => `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--slate-100);font-size:12.5px">
+      <span>${t.clinic_medicine_name} — ${t.quantity} units</span>
+      <button class="ai-btn" style="background:#E6F6EE;color:var(--signal-success)" onclick="dzReceiveTransfer('${t.id}')">Mark Received &amp; Add to Stock</button>
+    </div>`).join("");
+}
+
+async function dzReceiveTransfer(id) {
+  const { data: t } = await window.dzSupabase.from("clinic_distro_transfers").select("*").eq("id",id).single();
+  if (!t) return;
+  const orgId = window.DZ_SESSION.profile.organization_id;
+  // Find or create a matching clinic medicine by name (real, no fake data).
+  let { data: existingMed } = await window.dzSupabase.from("medicines").select("id").eq("organization_id",orgId).ilike("name", t.clinic_medicine_name).maybeSingle();
+  let medId = existingMed?.id;
+  if (!medId) {
+    const { data: newMed } = await window.dzSupabase.from("medicines").insert({ organization_id: orgId, name: t.clinic_medicine_name, is_active: true }).select("id").single();
+    medId = newMed?.id;
+  }
+  const { data: batch } = await window.dzSupabase.from("medicine_batches").insert({
+    organization_id: orgId, medicine_id: medId, qty: t.quantity, batch_no: "TRF-"+t.id.slice(0,6),
+  }).select("id").single();
+  await window.dzSupabase.from("stock_ledger").insert({
+    organization_id: orgId, medicine_id: medId, batch_id: batch?.id, change_qty: t.quantity, reason: "clinic_transfer_receive", ref_id: t.id,
+  });
+  await window.dzSupabase.from("clinic_distro_transfers").update({ status: "received", received_at: new Date().toISOString() }).eq("id", id);
+  alert("Stock received and added to Clinic Pharmacy inventory.");
+  await dzLoadPendingReceive();
+  await dzLoadPharmQueue();
+}
+
 
 let dzPharmPollHandle = null;
 function dzStartPharmacyPolling() {
