@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Invoice — Dr. Zaid Distribution</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  body{background:var(--slate-100);padding:24px}
+  .toolbar{max-width:900px;margin:0 auto 14px;display:flex;justify-content:space-between;align-items:center}
+  .wrap{max-width:900px;margin:0 auto;background:#fff;border:1px solid var(--slate-200);border-radius:12px;padding:28px}
+  .primary-btn{padding:10px 18px;background:var(--clinical-700);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:13px}
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  th{background:var(--clinical-700);color:#fff;padding:7px 6px;text-align:left;font-size:10.5px;text-transform:uppercase}
+  td{padding:6px;border-bottom:1px solid var(--slate-100)}
+  .box{border:1px solid var(--slate-200);border-radius:8px;padding:12px}
+  .band{background:var(--clinical-700);color:#fff;padding:6px 12px;border-radius:8px;font-weight:700}
+  @media print {
+    body{background:#fff;padding:0}
+    .toolbar, .no-print{display:none !important}
+    .wrap{border:none;box-shadow:none;max-width:100%}
+  }
+</style>
+</head>
+<body>
+  <div class="toolbar no-print">
+    <b>Distribution — Invoice</b>
+    <div>
+      <button class="primary-btn" onclick="window.print()">🖨 Print Invoice</button>
+      <button class="primary-btn" style="background:#fff;color:var(--clinical-700);border:1px solid var(--clinical-700)" onclick="window.close()">Close</button>
+    </div>
+  </div>
+  <div class="wrap" id="invoiceHost">Loading…</div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}
+function dzMoney(n){return (Number(n)||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});}
+</script>
+<script>
+(async () => {
+  const session = await dzRequireSession(null);
+  if (!session) return;
+  const orgId = session.profile.organization_id;
+
+  const params = new URLSearchParams(window.location.search);
+  const invoiceId = params.get("id");
+  if (!invoiceId) { document.getElementById("invoiceHost").innerHTML = "No invoice specified."; return; }
+
+  const [{ data: org }, { data: inv }, { data: items }] = await Promise.all([
+    window.dzSupabase.from("organizations").select("*").eq("id", orgId).single(),
+    window.dzSupabase.from("distro_invoices").select("*, distro_retailers(*)").eq("id", invoiceId).single(),
+    window.dzSupabase.from("distro_invoice_items").select("*, distro_medicines(name)").eq("invoice_id", invoiceId).order("sr_no"),
+  ]);
+
+  if (!inv) { document.getElementById("invoiceHost").innerHTML = "Invoice not found."; return; }
+  const retailer = inv.distro_retailers || {};
+  const rows = items || [];
+
+  // Real GST breakdown by rate (grouped, not hardcoded) - matches the reference layout exactly.
+  const gstGroups = {};
+  rows.forEach(r => {
+    const rate = r.gst_rate || 0;
+    if (!gstGroups[rate]) gstGroups[rate] = { taxable: 0, sgst: 0, cgst: 0 };
+    const taxable = (r.qty||0) * (r.unit_price||0) * (1 - (r.discount_percent||0)/100);
+    const taxAmt = taxable * rate / 100;
+    gstGroups[rate].taxable += taxable;
+    gstGroups[rate].sgst += taxAmt/2;
+    gstGroups[rate].cgst += taxAmt/2;
+  });
+  const totalQty = rows.reduce((s,r)=>s+(r.qty||0),0);
+
+  document.getElementById("invoiceHost").innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid var(--clinical-700);padding-bottom:14px;margin-bottom:16px">
+      <div style="display:flex;gap:12px;align-items:center">
+        ${org.logo_url ? `<img src="${dzEsc(org.logo_url)}" style="height:52px">` : ''}
+        <div>
+          <div style="font-size:22px;font-weight:900;color:var(--clinical-700);letter-spacing:.3px">${dzEsc(org.name || "Distribution")}</div>
+          <div style="font-size:12px;color:var(--slate-500)">Wholesale Sales Invoice</div>
+        </div>
+      </div>
+      <div class="box" style="min-width:230px">
+        <div class="band" style="text-align:center;margin:-13px -13px 8px;border-radius:8px 8px 0 0">INVOICE</div>
+        <table style="font-size:11.5px"><tbody>
+          <tr><td style="border:none;color:var(--slate-500)">Invoice No.</td><td style="border:none">: <b>${dzEsc(inv.invoice_number_display || inv.invoice_number || inv.id.slice(0,8))}</b></td></tr>
+          <tr><td style="border:none;color:var(--slate-500)">Date</td><td style="border:none">: ${new Date(inv.created_at).toLocaleDateString("en-GB")}</td></tr>
+          <tr><td style="border:none;color:var(--slate-500)">Due Date</td><td style="border:none">: ${inv.due_date ? new Date(inv.due_date).toLocaleDateString("en-GB") : "—"}</td></tr>
+          <tr><td style="border:none;color:var(--slate-500)">Ref. No.</td><td style="border:none">: ${dzEsc(inv.ref_number)||"—"}</td></tr>
+          <tr><td style="border:none;color:var(--slate-500)">Note</td><td style="border:none">: ${dzEsc(inv.notes)||"—"}</td></tr>
+        </tbody></table>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
+      <div class="box">
+        <div style="font-weight:700;color:var(--clinical-700);font-size:12px;margin-bottom:6px">🏢 SELLER DETAILS</div>
+        <div style="font-weight:700;font-size:13.5px">${dzEsc(org.name)}</div>
+        <div style="font-size:11.5px;color:var(--slate-600);margin:4px 0">${dzEsc(org.address)||''}${org.city?', '+dzEsc(org.city):''}${org.postal_code?' - '+dzEsc(org.postal_code):''}</div>
+        <div style="font-size:11.5px">Phone: ${dzEsc(org.phone_primary)||'—'} ${org.email?'&middot; Email: '+dzEsc(org.email):''}</div>
+        <div style="font-size:11.5px;margin-top:4px"><b>GSTIN:</b> ${dzEsc(org.gstin)||'Not configured'}</div>
+        <div style="font-size:11.5px"><b>DL No.:</b> ${dzEsc(org.dl_number)||'Not configured'}${org.dl_number_2?', '+dzEsc(org.dl_number_2):''}</div>
+      </div>
+      <div class="box">
+        <div style="font-weight:700;color:var(--clinical-700);font-size:12px;margin-bottom:6px">👤 BUYER DETAILS</div>
+        <div style="font-weight:700;font-size:13.5px">${dzEsc(retailer.name)||'—'}</div>
+        <div style="font-size:11.5px;color:var(--slate-600);margin:4px 0">${dzEsc(retailer.address)||''}${retailer.pincode?' — Pin: '+dzEsc(retailer.pincode):''}</div>
+        <div style="font-size:11.5px">Phone: ${dzEsc(retailer.phone)||'—'}</div>
+        <div style="font-size:11.5px;margin-top:4px"><b>GSTIN:</b> ${dzEsc(retailer.gstin)||'Not on file'}</div>
+        <div style="font-size:11.5px"><b>DL No.:</b> ${dzEsc(retailer.dl_number)||'Not on file'}</div>
+      </div>
+    </div>
+
+    <table style="margin-bottom:6px">
+      <thead><tr>
+        <th>Sr.</th><th>HSN</th><th>Description</th><th>Pack</th><th>Unit</th><th>Batch</th><th>Exp.</th>
+        <th>Qty</th><th>Free</th><th>MRP</th><th>Rate</th><th>Disc%</th><th>GST%</th><th style="text-align:right">Amount (₹)</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map((r,i) => {
+          const taxable = (r.qty||0)*(r.unit_price||0)*(1-(r.discount_percent||0)/100);
+          const amount = taxable * (1 + (r.gst_rate||0)/100);
+          return `<tr>
+            <td>${i+1}</td>
+            <td>${dzEsc(r.hsn_code)||'-'}</td>
+            <td>${dzEsc(r.distro_medicines?.name)||'-'}</td>
+            <td>${dzEsc(r.pack_size)||'-'}</td>
+            <td>${dzEsc(r.unit)||'-'}</td>
+            <td>${dzEsc(r.batch_no_snapshot)||'-'}</td>
+            <td>${r.expiry_date_snapshot ? new Date(r.expiry_date_snapshot).toLocaleDateString("en-GB",{month:"2-digit",year:"numeric"}) : '-'}</td>
+            <td>${r.qty||0}</td>
+            <td>${r.free_qty||0}</td>
+            <td>${dzMoney(r.mrp)}</td>
+            <td>${dzMoney(r.unit_price)}</td>
+            <td>${r.discount_percent||0}</td>
+            <td>${r.gst_rate||0}</td>
+            <td style="text-align:right">${dzMoney(amount)}</td>
+          </tr>`;
+        }).join("")}
+      </tbody>
+      <tfoot><tr>
+        <td colspan="7" style="border:none"></td>
+        <td colspan="6" style="text-align:center;font-weight:700;border-top:2px solid var(--clinical-700)">Total Qty: ${totalQty}</td>
+        <td style="text-align:right;font-weight:800;border-top:2px solid var(--clinical-700);color:var(--clinical-700)">${dzMoney(inv.total_amount)}</td>
+      </tr></tfoot>
+    </table>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:16px">
+      <div class="box">
+        <div style="font-weight:700;color:var(--clinical-700);font-size:12px;margin-bottom:6px">🏦 BANK DETAILS</div>
+        <div style="font-size:11.5px">${dzEsc(org.bank_name)||'Not configured'}</div>
+        <div style="font-size:11.5px">A/C No.: ${dzEsc(org.bank_account_number)||'—'}</div>
+        <div style="font-size:11.5px">IFSC: ${dzEsc(org.bank_ifsc)||'—'}</div>
+        ${org.payment_terms_note ? `<div style="font-size:10.5px;color:var(--slate-500);margin-top:6px"><b>Terms:</b> ${dzEsc(org.payment_terms_note)}</div>` : ''}
+      </div>
+      <div class="box">
+        <div style="font-weight:700;color:var(--clinical-700);font-size:12px;margin-bottom:6px">TAX SUMMARY</div>
+        <table style="font-size:10.5px"><thead><tr><th style="background:var(--slate-100);color:var(--slate-700)">Rate</th><th style="background:var(--slate-100);color:var(--slate-700)">Taxable</th><th style="background:var(--slate-100);color:var(--slate-700)">SGST</th><th style="background:var(--slate-100);color:var(--slate-700)">CGST</th></tr></thead>
+        <tbody>${Object.entries(gstGroups).map(([rate,g]) => `<tr><td>${rate}%</td><td>${dzMoney(g.taxable)}</td><td>${dzMoney(g.sgst)}</td><td>${dzMoney(g.cgst)}</td></tr>`).join("")}</tbody></table>
+      </div>
+      <div class="box">
+        <table style="font-size:12px"><tbody>
+          <tr><td style="border:none">Sub Total</td><td style="border:none;text-align:right">${dzMoney(inv.subtotal)}</td></tr>
+          <tr><td style="border:none">Discount</td><td style="border:none;text-align:right">-${dzMoney(inv.discount_amount)}</td></tr>
+          <tr><td style="border:none">SGST</td><td style="border:none;text-align:right">${dzMoney(inv.sgst_amount)}</td></tr>
+          <tr><td style="border:none">CGST</td><td style="border:none;text-align:right">${dzMoney(inv.cgst_amount)}</td></tr>
+          <tr><td style="border:none">Round Off</td><td style="border:none;text-align:right">${dzMoney(inv.round_off)}</td></tr>
+          <tr style="background:var(--clinical-700);color:#fff"><td style="border:none;font-weight:800;padding:8px 6px">NET AMOUNT</td><td style="border:none;text-align:right;font-weight:800;padding:8px 6px">₹ ${dzMoney(inv.total_amount)}</td></tr>
+        </tbody></table>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;margin-top:30px;font-size:11.5px;color:var(--slate-600)">
+      <div>For ${dzEsc(org.name)}</div>
+      <div>Authorised Signatory</div>
+    </div>
+    <div style="text-align:center;border-top:1px solid var(--slate-200);margin-top:16px;padding-top:10px;font-size:10.5px;color:var(--slate-500)">
+      ${dzEsc(org.phone_primary)||''} &middot; ${dzEsc(org.email)||''} &middot; ${dzEsc(org.address)||''} &middot; ${dzEsc(org.website)||''}
+    </div>`;
+})();
+</script>
+</body>
+</html>
