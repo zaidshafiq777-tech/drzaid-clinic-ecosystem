@@ -25,6 +25,7 @@
 <script src="../shared/auth.js"></script>
 <script src="../shared/auth-role-service.js"></script>
 <script src="../shared/shell.js"></script>
+<script src="../shared/distro-agent.js"></script>
 <script src="../shared/command-bar.js"></script>
 <script src="../shared/ai-copilot.js"></script>
 <script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
@@ -51,6 +52,12 @@ let dzOrgId = null;
       </div>
       <div id="addSupForm" style="display:none;background:var(--slate-50);border-radius:8px;padding:14px;margin:14px 0"></div>
       <div id="supplierList" style="margin-top:14px">Loading…</div>
+      <div class="dz-panel" style="margin-top:14px;background:var(--slate-50)">
+        <h2 style="font-size:13px">🤖 Supplier Intelligence — Rate Comparison</h2>
+        <select id="rateCompMed" style="width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px;margin-top:8px"></select>
+        <button class="ghost-refresh" style="margin-top:8px" onclick="dzRunRateComparison()">Compare Rates</button>
+        <div id="rateCompResult" style="margin-top:10px"></div>
+      </div>
       </div>
       <div id="supPanel-1" style="display:none">
         <div style="display:flex;justify-content:space-between;align-items:center">
@@ -62,6 +69,8 @@ let dzOrgId = null;
       </div>
     </div>`;
   await dzLoadSuppliers();
+  const { data: rcMeds } = await window.dzSupabase.from("distro_medicines").select("id,product_name").eq("organization_id",dzOrgId).eq("status","active");
+  document.getElementById("rateCompMed").innerHTML = `<option value="">Select medicine…</option>` + (rcMeds||[]).map(m=>`<option value="${m.id}">${dzEsc(m.product_name)}</option>`).join("");
 })();
 
 function dzToggleAddSupplier() {
@@ -240,6 +249,19 @@ async function dzPostStockInward() {
   } catch (e) {
     status.innerHTML = `<span style="color:var(--signal-critical)">Failed partway through posting: ${e.message}. Please check Stock Ledger/Batches for partial entries before retrying.</span>`;
   }
+}
+
+async function dzRunRateComparison() {
+  const medId = document.getElementById("rateCompMed").value;
+  const host = document.getElementById("rateCompResult");
+  if (!medId) { host.innerHTML = ""; return; }
+  host.innerHTML = `<div style="font-size:12px;color:var(--slate-500)">Comparing…</div>`;
+  const { data: batches } = await window.dzSupabase.from("distro_batches").select("medicine_id, supplier_id, purchase_rate, distro_suppliers(name)").eq("organization_id",dzOrgId).eq("medicine_id",medId).not("supplier_id","is",null);
+  const mapped = (batches||[]).map(b => ({ medicine_id: b.medicine_id, supplier_id: b.supplier_id, purchase_rate: b.purchase_rate, supplier_name: b.distro_suppliers?.name }));
+  const cmp = dzCompareSupplierRates(medId, mapped);
+  if (!cmp.rows.length) { host.innerHTML = dzEmptyState("📊","No purchase history for this medicine yet",""); return; }
+  host.innerHTML = `<table><thead><tr><th>Supplier</th><th>Avg Rate</th><th>Min</th><th>Max</th><th>Purchases</th></tr></thead>
+    <tbody>${cmp.rows.map(r => `<tr style="${r.supplierId===cmp.cheapest.supplierId?'background:#E6F6EE':''}"><td>${dzEsc(r.supplierName)}${r.supplierId===cmp.cheapest.supplierId?' ✓ Cheapest':''}</td><td>${r.avgRate.toFixed(2)}</td><td>${r.minRate.toFixed(2)}</td><td>${r.maxRate.toFixed(2)}</td><td>${r.purchaseCount}</td></tr>`).join("")}</tbody></table>`;
 }
 
 async function dzLoadInwards() {
