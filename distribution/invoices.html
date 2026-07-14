@@ -29,6 +29,7 @@
 <script src="../shared/auth.js"></script>
 <script src="../shared/auth-role-service.js"></script>
 <script src="../shared/shell.js"></script>
+<script src="../shared/distro-agent.js"></script>
 <script src="../shared/command-bar.js"></script>
 <script src="../shared/ai-copilot.js"></script>
 <script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
@@ -96,18 +97,21 @@ function dzUpdateLine(i, field, val) {
   dzLineItems[i][field] = field==='medicine_id' ? val : parseFloat(val)||0;
   if (field==='medicine_id') {
     const m = (window._dzInvMedicines||[]).find(x=>x.id===val);
-    if (m) { dzLineItems[i].rate = m.default_trade_rate||0; dzLineItems[i].mrp = m.mrp||0; dzRenderLineItems(); return; }
+    if (m) { dzLineItems[i].rate = m.default_trade_rate||0; dzLineItems[i].mrp = m.mrp||0; dzLineItems[i].purchase_rate = m.default_purchase_rate||0; dzRenderLineItems(); return; }
   }
   dzUpdateTotalPreview();
 }
 function dzRemoveLine(i) { dzLineItems.splice(i,1); dzRenderLineItems(); }
 function dzUpdateTotalPreview() {
   let subtotal=0, tax=0;
+  let pricingWarnings = [];
   dzLineItems.forEach(li => {
     const taxable = (li.quantity||0)*(li.rate||0)*(1-(li.discount_percent||0)/100);
     subtotal += taxable; tax += taxable*(li.gst_rate||0)/100;
+    if (li.medicine_id) pricingWarnings.push(...dzCheckPricingGuard(li, 5));
   });
-  document.getElementById("invTotalPreview").textContent = `Subtotal: Rs ${subtotal.toFixed(2)} + Tax: Rs ${tax.toFixed(2)} = Total: Rs ${(subtotal+tax).toFixed(2)}`;
+  document.getElementById("invTotalPreview").innerHTML = `Subtotal: Rs ${subtotal.toFixed(2)} + Tax: Rs ${tax.toFixed(2)} = Total: Rs ${(subtotal+tax).toFixed(2)}` +
+    (pricingWarnings.length ? `<div style="margin-top:6px">` + pricingWarnings.map(w=>`<div style="font-weight:400;font-size:11.5px;padding:4px 8px;border-radius:6px;margin-top:3px;background:${w.level==='critical'?'#FDECEC':'#FFF7E6'};color:${w.level==='critical'?'var(--signal-critical)':'var(--signal-warning)'}">🛡 ${dzEsc(w.text)}</div>`).join("") + `</div>` : "");
 }
 
 async function dzSaveInvoice() {
