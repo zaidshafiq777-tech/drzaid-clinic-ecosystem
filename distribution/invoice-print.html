@@ -64,13 +64,13 @@ function dzMoney(n){return (Number(n)||0).toLocaleString("en-IN",{minimumFractio
   rows.forEach(r => {
     const rate = r.gst_rate || 0;
     if (!gstGroups[rate]) gstGroups[rate] = { taxable: 0, sgst: 0, cgst: 0 };
-    const taxable = (r.qty||0) * (r.unit_price||0) * (1 - (r.discount_percent||0)/100);
+    const taxable = (r.quantity||0) * (r.rate||0) * (1 - (r.discount_percent||0)/100);
     const taxAmt = taxable * rate / 100;
     gstGroups[rate].taxable += taxable;
     gstGroups[rate].sgst += taxAmt/2;
     gstGroups[rate].cgst += taxAmt/2;
   });
-  const totalQty = rows.reduce((s,r)=>s+(r.qty||0),0);
+  const totalQty = rows.reduce((s,r)=>s+(r.quantity||0),0);
 
   document.getElementById("invoiceHost").innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid var(--clinical-700);padding-bottom:14px;margin-bottom:16px">
@@ -119,20 +119,20 @@ function dzMoney(n){return (Number(n)||0).toLocaleString("en-IN",{minimumFractio
       </tr></thead>
       <tbody>
         ${rows.map((r,i) => {
-          const taxable = (r.qty||0)*(r.unit_price||0)*(1-(r.discount_percent||0)/100);
+          const taxable = (r.quantity||0)*(r.rate||0)*(1-(r.discount_percent||0)/100);
           const amount = taxable * (1 + (r.gst_rate||0)/100);
           return `<tr>
             <td>${i+1}</td>
             <td>${dzEsc(r.hsn_code)||'-'}</td>
-            <td>${dzEsc(r.distro_medicines?.name)||'-'}</td>
+            <td>${dzEsc(r.distro_medicines?.product_name || r.product_name)||'-'}</td>
             <td>${dzEsc(r.pack_size)||'-'}</td>
             <td>${dzEsc(r.unit)||'-'}</td>
-            <td>${dzEsc(r.batch_no_snapshot)||'-'}</td>
-            <td>${r.expiry_date_snapshot ? new Date(r.expiry_date_snapshot).toLocaleDateString("en-GB",{month:"2-digit",year:"numeric"}) : '-'}</td>
-            <td>${r.qty||0}</td>
+            <td>${dzEsc(r.batch_number)||'-'}</td>
+            <td>${r.expiry_date ? new Date(r.expiry_date).toLocaleDateString("en-GB",{month:"2-digit",year:"numeric"}) : '-'}</td>
+            <td>${r.quantity||0}</td>
             <td>${r.free_qty||0}</td>
             <td>${dzMoney(r.mrp)}</td>
-            <td>${dzMoney(r.unit_price)}</td>
+            <td>${dzMoney(r.rate)}</td>
             <td>${r.discount_percent||0}</td>
             <td>${r.gst_rate||0}</td>
             <td style="text-align:right">${dzMoney(amount)}</td>
@@ -162,7 +162,7 @@ function dzMoney(n){return (Number(n)||0).toLocaleString("en-IN",{minimumFractio
       <div class="box">
         <table style="font-size:12px"><tbody>
           <tr><td style="border:none">Sub Total</td><td style="border:none;text-align:right">${dzMoney(inv.subtotal)}</td></tr>
-          <tr><td style="border:none">Discount</td><td style="border:none;text-align:right">-${dzMoney(inv.discount_amount)}</td></tr>
+          <tr><td style="border:none">Discount</td><td style="border:none;text-align:right">-${dzMoney(inv.discount)}</td></tr>
           <tr><td style="border:none">SGST</td><td style="border:none;text-align:right">${dzMoney(inv.sgst_amount)}</td></tr>
           <tr><td style="border:none">CGST</td><td style="border:none;text-align:right">${dzMoney(inv.cgst_amount)}</td></tr>
           <tr><td style="border:none">Round Off</td><td style="border:none;text-align:right">${dzMoney(inv.round_off)}</td></tr>
