@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Suppliers — Distribution</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase;padding:7px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:6px;border-bottom:1px solid var(--slate-100)}
+  .fld{margin-bottom:10px}
+  .fld label{font-size:11.5px;font-weight:600;display:block;margin-bottom:4px}
+  .fld input{width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px;box-sizing:border-box}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null;
+(async () => {
+  const session = await requireRole(null);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "distribution", title: "Suppliers &amp; Purchases", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">Suppliers</h2>
+        <button class="primary-btn" onclick="dzToggleAddSupplier()">+ Add Supplier</button>
+      </div>
+      <div id="addSupForm" style="display:none;background:var(--slate-50);border-radius:8px;padding:14px;margin:14px 0"></div>
+      <div id="supplierList" style="margin-top:14px">Loading…</div>
+    </div>`;
+  await dzLoadSuppliers();
+})();
+
+function dzToggleAddSupplier() {
+  const host = document.getElementById("addSupForm");
+  if (host.style.display === "block") { host.style.display = "none"; return; }
+  host.style.display = "block";
+  host.innerHTML = `
+    <div class="grid3">
+      <div class="fld"><label>Supplier Name *</label><input id="s_name"></div>
+      <div class="fld"><label>Contact Person</label><input id="s_contact"></div>
+      <div class="fld"><label>Phone</label><input id="s_phone"></div>
+      <div class="fld"><label>City</label><input id="s_city"></div>
+      <div class="fld"><label>Payment Terms</label><input id="s_terms" placeholder="e.g. Net 30 days"></div>
+      <div class="fld"><label>Opening Balance (Payable)</label><input id="s_opening" type="number"></div>
+      <div class="fld" style="grid-column:1/-1"><label>Address</label><input id="s_address"></div>
+    </div>
+    <button class="primary-btn" onclick="dzSaveSupplier()">Save Supplier</button>
+    <span id="supSaveStatus" style="margin-left:8px;font-size:12px"></span>`;
+}
+
+async function dzSaveSupplier() {
+  const status = document.getElementById("supSaveStatus");
+  const name = document.getElementById("s_name").value.trim();
+  if (!name) { status.innerHTML = `<span style="color:var(--signal-critical)">Supplier name is required.</span>`; return; }
+  const { error } = await window.dzSupabase.from("distro_suppliers").insert({
+    organization_id: dzOrgId, name, contact_person: document.getElementById("s_contact").value || null,
+    phone: document.getElementById("s_phone").value || null, city: document.getElementById("s_city").value || null,
+    payment_terms: document.getElementById("s_terms").value || null,
+    opening_balance: parseFloat(document.getElementById("s_opening").value)||0,
+    current_payable: parseFloat(document.getElementById("s_opening").value)||0,
+    address: document.getElementById("s_address").value || null, status: "active",
+  });
+  if (error) { status.innerHTML = `<span style="color:var(--signal-critical)">${error.message}</span>`; return; }
+  status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Saved.</span>`;
+  document.getElementById("addSupForm").style.display = "none";
+  await dzLoadSuppliers();
+}
+
+async function dzLoadSuppliers() {
+  const host = document.getElementById("supplierList");
+  const { data, error } = await window.dzSupabase.from("distro_suppliers").select("*").eq("organization_id",dzOrgId).order("name");
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("🚚","No suppliers yet","Add your first supplier above."); return; }
+  host.innerHTML = `<table><thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>City</th><th>Payable</th><th>Terms</th></tr></thead>
+    <tbody>${data.map(s => `<tr><td><b>${dzEsc(s.name)}</b></td><td>${dzEsc(s.contact_person)||'-'}</td><td>${dzEsc(s.phone)||'-'}</td>
+      <td>${dzEsc(s.city)||'-'}</td><td>Rs ${(s.current_payable||0).toLocaleString()}</td><td>${dzEsc(s.payment_terms)||'-'}</td></tr>`).join("")}</tbody></table>`;
+}
+</script>
+</body>
+</html>
