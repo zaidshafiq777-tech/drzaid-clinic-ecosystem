@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Retailers &amp; Orders — Distribution</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase;padding:7px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:6px;border-bottom:1px solid var(--slate-100)}
+  .fld{margin-bottom:10px}
+  .fld label{font-size:11.5px;font-weight:600;display:block;margin-bottom:4px}
+  .fld input,.fld select,.fld textarea{width:100%;padding:8px;border:1px solid var(--slate-200);border-radius:6px;font-size:12.5px;box-sizing:border-box}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  .tab{padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--slate-500);border-bottom:2px solid transparent;cursor:pointer}
+  .tab.active{color:var(--clinical-700);border-color:var(--clinical-700)}
+  .risk-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
+  .risk-LOW{background:#E6F6EE;color:var(--signal-success)}
+  .risk-MEDIUM{background:#FFF7E6;color:var(--signal-warning)}
+  .risk-HIGH,.risk-CRITICAL{background:#FDECEC;color:var(--signal-critical)}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/response-parser.js"></script>
+<script src="../shared/ai-manager.js"></script>
+<script src="../shared/distro-agent.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null, dzMedicineCache = [], dzRetailerCache = [];
+(async () => {
+  const session = await requireRole(null);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "distribution", title: "Retailers &amp; Orders", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <div class="tabs" style="display:flex;gap:4px;border-bottom:1px solid var(--slate-200);margin-bottom:14px">
+        <div class="tab active" onclick="dzSwitchTab(0)">Retailers</div>
+        <div class="tab" onclick="dzSwitchTab(1)">🤖 AI Order Parser</div>
+      </div>
+      <div id="panel-0">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+          <button class="primary-btn" onclick="dzToggleAddRetailer()">+ Add Retailer</button>
+        </div>
+        <div id="addRetForm" style="display:none;background:var(--slate-50);border-radius:8px;padding:14px;margin-bottom:14px"></div>
+        <div id="retailerList">Loading…</div>
+      </div>
+      <div id="panel-1" style="display:none">
+        <div class="sub">Type an order in Roman Urdu, Urdu, or English. AI drafts it — you confirm before it's created.</div>
+        <textarea id="orderText" rows="3" placeholder="e.g. Ali Medical Store ko Panadol 10 box aur Augmentin 5 box bhej dein" style="width:100%;padding:10px;border:1px solid var(--slate-200);border-radius:8px;font-size:13px;margin:10px 0;box-sizing:border-box"></textarea>
+        <button class="primary-btn" onclick="dzRunOrderParser()">Parse Order with AI</button>
+        <div id="parserResult" style="margin-top:14px"></div>
+      </div>
+    </div>`;
+  await dzLoadRetailers();
+})();
+
+function dzSwitchTab(i) {
+  document.querySelectorAll(".tab").forEach((t,idx)=>t.classList.toggle("active",idx===i));
+  document.getElementById("panel-0").style.display = i===0?"block":"none";
+  document.getElementById("panel-1").style.display = i===1?"block":"none";
+}
+
+function dzToggleAddRetailer() {
+  const host = document.getElementById("addRetForm");
+  if (host.style.display === "block") { host.style.display = "none"; return; }
+  host.style.display = "block";
+  host.innerHTML = `
+    <div class="grid3">
+      <div class="fld"><label>Shop Name *</label><input id="r_shop"></div>
+      <div class="fld"><label>Owner Name</label><input id="r_owner"></div>
+      <div class="fld"><label>Phone</label><input id="r_phone"></div>
+      <div class="fld"><label>Area</label><input id="r_area"></div>
+      <div class="fld" style="grid-column:1/-1"><label>Address</label><input id="r_address"></div>
+      <div class="fld"><label>Credit Limit</label><input id="r_credit" type="number"></div>
+      <div class="fld"><label>Payment Terms</label><input id="r_terms" placeholder="e.g. Net 15 days"></div>
+      <div class="fld"><label>Opening Balance</label><input id="r_opening" type="number"></div>
+    </div>
+    <button class="primary-btn" onclick="dzSaveRetailer()">Save Retailer</button>
+    <span id="retSaveStatus" style="margin-left:8px;font-size:12px"></span>`;
+}
+
+async function dzSaveRetailer() {
+  const status = document.getElementById("retSaveStatus");
+  const shop = document.getElementById("r_shop").value.trim();
+  if (!shop) { status.innerHTML = `<span style="color:var(--signal-critical)">Shop name is required.</span>`; return; }
+  const { error } = await window.dzSupabase.from("distro_retailers").insert({
+    organization_id: dzOrgId, shop_name: shop, owner_name: document.getElementById("r_owner").value || null,
+    phone: document.getElementById("r_phone").value || null, area: document.getElementById("r_area").value || null,
+    address: document.getElementById("r_address").value || null,
+    credit_limit: parseFloat(document.getElementById("r_credit").value)||0,
+    payment_terms: document.getElementById("r_terms").value || null,
+    opening_balance: parseFloat(document.getElementById("r_opening").value)||0,
+    current_balance: parseFloat(document.getElementById("r_opening").value)||0,
+    risk_status: "Good", status: "active",
+  });
+  if (error) { status.innerHTML = `<span style="color:var(--signal-critical)">${error.message}</span>`; return; }
+  status.innerHTML = `<span style="color:var(--signal-success);font-weight:700">✓ Saved.</span>`;
+  document.getElementById("addRetForm").style.display = "none";
+  await dzLoadRetailers();
+}
+
+async function dzLoadRetailers() {
+  const host = document.getElementById("retailerList");
+  const { data, error } = await window.dzSupabase.from("distro_retailers").select("*").eq("organization_id",dzOrgId).order("shop_name");
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  dzRetailerCache = data || [];
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("🏪","No retailers yet","Add your first retailer above."); return; }
+  host.innerHTML = `<table><thead><tr><th>Shop</th><th>Area</th><th>Phone</th><th>Credit Limit</th><th>Balance</th><th>Risk</th></tr></thead>
+    <tbody>${data.map(r => {
+      const risk = dzAssessCreditRisk(r, []);
+      return `<tr><td><b>${dzEsc(r.shop_name)}</b>${r.owner_name?'<div style="font-size:10.5px;color:var(--slate-500)">'+dzEsc(r.owner_name)+'</div>':''}</td>
+        <td>${dzEsc(r.area)||'-'}</td><td>${dzEsc(r.phone)||'-'}</td>
+        <td>${(r.credit_limit||0).toLocaleString()}</td><td>${(r.current_balance||0).toLocaleString()}</td>
+        <td><span class="risk-badge risk-${risk.risk}">${risk.risk}</span></td></tr>`;
+    }).join("")}</tbody></table>`;
+}
+
+async function dzRunOrderParser() {
+  const text = document.getElementById("orderText").value.trim();
+  const resultHost = document.getElementById("parserResult");
+  if (!text) return;
+  resultHost.innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">AI parsing…</div>`;
+
+  const { data: meds } = await window.dzSupabase.from("distro_medicines").select("id, product_name").eq("organization_id",dzOrgId).eq("status","active");
+  dzMedicineCache = meds || [];
+  const r = await dzParseDistroOrder(text, dzMedicineCache, dzRetailerCache);
+  if (!r.ok) { resultHost.innerHTML = `<div class="warnBar" style="background:#FDECEC;color:var(--signal-critical);padding:10px;border-radius:6px;font-size:12.5px">${dzEsc(r.error)}</div>`; return; }
+
+  const d = r.data;
+  const matchedRetailer = dzRetailerCache.find(rt => rt.shop_name.toLowerCase().includes((d.retailer||"").toLowerCase()));
+  resultHost.innerHTML = `
+    <div style="background:var(--slate-50);border-radius:8px;padding:12px;font-size:12.5px">
+      <div><b>Retailer:</b> ${dzEsc(d.retailer)||'Not identified'} ${matchedRetailer?'<span style="color:var(--signal-success)">✓ matched</span>':'<span style="color:var(--signal-warning)">⚠ not found in system</span>'}</div>
+      <div style="margin-top:8px"><b>Items:</b></div>
+      <table style="margin-top:4px"><thead><tr><th>Raw Text</th><th>Matched Medicine</th><th>Qty</th><th>Confidence</th></tr></thead>
+      <tbody>${(d.items||[]).map(i => `<tr><td>${dzEsc(i.rawName)}</td><td>${dzEsc(i.matchedMedicineName)||'<span style="color:var(--signal-warning)">Not matched</span>'}</td><td>${i.quantity} ${dzEsc(i.unit)||''}</td><td>${Math.round((i.confidence||0)*100)}%</td></tr>`).join("")}</tbody></table>
+      ${(d.warnings||[]).length ? `<div style="color:var(--signal-warning);margin-top:6px">⚠ ${d.warnings.map(dzEsc).join("; ")}</div>` : ''}
+      <div style="font-size:11px;color:var(--slate-500);margin-top:8px">This is a DRAFT only — nothing is saved yet. Review before confirming.</div>
+      <button class="primary-btn" style="margin-top:8px" onclick="alert('Order creation from parsed draft — coming in the next increment. For now, use this to quickly identify items/quantities, then verify manually.')">Confirm &amp; Create Order (draft only for now)</button>
+    </div>`;
+}
+</script>
+</body>
+</html>
