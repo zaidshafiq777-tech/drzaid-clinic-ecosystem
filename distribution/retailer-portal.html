@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Account — Distribution Retailer Portal</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase;padding:7px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:6px;border-bottom:1px solid var(--slate-100)}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null, dzMyRetailer = null;
+(async () => {
+  const session = await requireRole(null);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  const { data: retailer } = await window.dzSupabase.from("distro_retailers").select("*").eq("portal_user_id", session.user.id).maybeSingle();
+  if (!retailer) {
+    document.getElementById("dz-shell-root").innerHTML = "";
+    alert("Your account is not linked to a retailer profile yet. Ask the distribution owner to link your account.");
+    window.location.href = getDefaultPortal(session.profile.role);
+    return;
+  }
+  dzMyRetailer = retailer;
+  dzRenderShell({ activeKey: "distribution", title: "My Account — " + retailer.shop_name, profile: session.profile });
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-grid">
+      ${dzCard("Current Balance", "Rs " + (retailer.current_balance||0).toLocaleString(), "Live")}
+      ${dzCard("Credit Limit", "Rs " + (retailer.credit_limit||0).toLocaleString(), "Live")}
+    </div>
+    <div class="dz-panel">
+      <h2>My Invoices</h2>
+      <div id="myInvoices">Loading…</div>
+    </div>
+    <div class="dz-panel">
+      <h2>My Payment History</h2>
+      <div id="myPayments">Loading…</div>
+    </div>`;
+  await dzLoadMyInvoices();
+  await dzLoadMyPayments();
+})();
+
+async function dzLoadMyInvoices() {
+  const host = document.getElementById("myInvoices");
+  const { data, error } = await window.dzSupabase.from("distro_invoices").select("*").eq("retailer_id", dzMyRetailer.id).order("created_at",{ascending:false});
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("🧾","No invoices yet",""); return; }
+  host.innerHTML = `<table><thead><tr><th>Invoice#</th><th>Date</th><th>Amount</th><th>Status</th><th></th></tr></thead>
+    <tbody>${data.map(i => `<tr><td>${dzEsc(i.document_number)}</td><td>${new Date(i.created_at).toLocaleDateString("en-GB")}</td>
+      <td>Rs ${(i.total_amount||0).toLocaleString()}</td><td>${dzEsc(i.status)}</td>
+      <td><a href="invoice-print.html?id=${i.id}" target="_blank" style="color:var(--clinical-700);font-weight:600">View/Print</a></td></tr>`).join("")}</tbody></table>`;
+}
+
+async function dzLoadMyPayments() {
+  const host = document.getElementById("myPayments");
+  const { data, error } = await window.dzSupabase.from("distro_payments").select("*").eq("retailer_id", dzMyRetailer.id).order("payment_date",{ascending:false});
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = dzEmptyState("💰","No payments recorded yet",""); return; }
+  host.innerHTML = `<table><thead><tr><th>Date</th><th>Amount</th><th>Mode</th></tr></thead>
+    <tbody>${data.map(p => `<tr><td>${new Date(p.payment_date).toLocaleDateString("en-GB")}</td><td>Rs ${(p.amount||0).toLocaleString()}</td><td>${dzEsc(p.mode)||'-'}</td></tr>`).join("")}</tbody></table>`;
+}
+</script>
+</body>
+</html>
