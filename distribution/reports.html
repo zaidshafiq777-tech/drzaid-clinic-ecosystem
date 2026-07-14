@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reports — Distribution</title>
+<link rel="icon" href="../assets/favicon.png">
+<link rel="manifest" href="../manifest.json">
+<meta name="theme-color" content="#0B5C46">
+<link rel="stylesheet" href="../shared/theme.css">
+<style>
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;color:var(--slate-500);font-size:10.5px;text-transform:uppercase;padding:7px 6px;border-bottom:1px solid var(--slate-200)}
+  td{padding:6px;border-bottom:1px solid var(--slate-100)}
+  .rbtn{padding:8px 14px;border-radius:7px;font-size:12px;font-weight:600;border:1px solid var(--slate-200);background:#fff;margin-right:6px;margin-bottom:6px}
+  .rbtn.active{background:var(--clinical-700);color:#fff}
+</style>
+</head>
+<body>
+<div id="dz-shell-root"></div>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="../shared/supabase-client.js"></script>
+<script src="../shared/auth.js"></script>
+<script src="../shared/auth-role-service.js"></script>
+<script src="../shared/shell.js"></script>
+<script src="../shared/distro-agent.js"></script>
+<script src="../shared/command-bar.js"></script>
+<script src="../shared/ai-copilot.js"></script>
+<script>function dzEsc(s){return String(s==null?"":s).replace(/</g,"&lt;");}</script>
+<script>
+let dzOrgId = null;
+(async () => {
+  const session = await requireRole(null);
+  if (!session) return;
+  dzOrgId = session.profile.organization_id;
+  dzRenderShell({ activeKey: "distribution", title: "Distribution Reports", profile: session.profile });
+  dzCommandBarInit(session.profile);
+  dzCopilotInit(session.profile);
+
+  document.getElementById("dz-content").innerHTML = `
+    <div class="dz-panel">
+      <div id="reportButtons"></div>
+      <div id="reportHost" style="margin-top:14px"></div>
+    </div>`;
+  document.getElementById("reportButtons").innerHTML = [
+    ["stock","Current Stock &amp; Value"],["lowstock","Low Stock"],["expiry","Near Expiry / Expired"],
+    ["deadstock","Dead Stock (60d)"],["sales","Sales (30d)"],["receivables","Receivables Aging"],["payables","Supplier Payables"],
+  ].map(([k,l]) => `<button class="rbtn" id="rb-${k}" onclick="dzShowReport('${k}')">${l}</button>`).join("");
+  dzShowReport("stock");
+})();
+
+function dzHighlight(key) { document.querySelectorAll(".rbtn").forEach(b=>b.classList.remove("active")); document.getElementById("rb-"+key)?.classList.add("active"); }
+
+async function dzShowReport(key) {
+  dzHighlight(key);
+  const host = document.getElementById("reportHost");
+  host.innerHTML = `<div style="font-size:12.5px;color:var(--slate-500)">Loading…</div>`;
+
+  if (key === "stock") {
+    const { data } = await window.dzSupabase.from("distro_batches").select("*, distro_medicines(product_name)").eq("organization_id",dzOrgId).gt("current_quantity",0);
+    const rows = data || [];
+    const totalValue = rows.reduce((s,b)=>s+(b.current_quantity||0)*(b.purchase_rate||0),0);
+    host.innerHTML = `<div style="font-weight:700;margin-bottom:8px">Total Inventory Value: Rs ${totalValue.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+      <table><thead><tr><th>Medicine</th><th>Batch</th><th>Qty</th><th>Purchase Rate</th><th>Value</th></tr></thead>
+      <tbody>${rows.map(b=>`<tr><td>${dzEsc(b.distro_medicines?.product_name)}</td><td>${dzEsc(b.batch_number)||'-'}</td><td>${b.current_quantity}</td><td>${(b.purchase_rate||0).toFixed(2)}</td><td>${((b.current_quantity||0)*(b.purchase_rate||0)).toFixed(2)}</td></tr>`).join("")}</tbody></table>`;
+  }
+
+  if (key === "lowstock") {
+    const { data: meds } = await window.dzSupabase.from("distro_medicines").select("id,product_name,minimum_stock").eq("organization_id",dzOrgId).eq("status","active");
+    const { data: batches } = await window.dzSupabase.from("distro_batches").select("medicine_id,current_quantity").eq("organization_id",dzOrgId).gt("current_quantity",0);
+    const stockByMed = {};
+    (batches||[]).forEach(b => { stockByMed[b.medicine_id] = (stockByMed[b.medicine_id]||0) + b.current_quantity; });
+    const low = (meds||[]).filter(m => (stockByMed[m.id]||0) <= (m.minimum_stock||0));
+    host.innerHTML = low.length ? `<table><thead><tr><th>Medicine</th><th>Current Stock</th><th>Minimum</th></tr></thead>
+      <tbody>${low.map(m=>`<tr><td>${dzEsc(m.product_name)}</td><td style="color:var(--signal-critical);font-weight:700">${stockByMed[m.id]||0}</td><td>${m.minimum_stock}</td></tr>`).join("")}</tbody></table>` : dzEmptyState("✓","No low-stock items","All medicines are above their minimum stock level.");
+  }
+
+  if (key === "expiry") {
+    const { data } = await window.dzSupabase.from("distro_batches").select("*, distro_medicines(product_name)").eq("organization_id",dzOrgId).gt("current_quantity",0);
+    const risk = dzScanExpiryRisk(data || []);
+    host.innerHTML = ["expired","in30","in60","in90"].map(k => {
+      const label = {expired:"🔴 Already Expired",in30:"🟠 Expiring in 30 days",in60:"🟡 Expiring in 60 days",in90:"🟢 Expiring in 90 days"}[k];
+      const list = risk[k];
+      return `<div style="margin-bottom:10px"><b>${label}</b> (${list.length})<br>${list.length ? list.map(b=>`${dzEsc(b.distro_medicines?.product_name)} — Batch ${dzEsc(b.batch_number)||'-'}, Qty ${b.current_quantity}, ${b.daysLeft}d`).join("<br>") : "<span style='color:var(--slate-500)'>None</span>"}</div>`;
+    }).join("");
+  }
+
+  if (key === "deadstock") {
+    const since = new Date(); since.setDate(since.getDate()-60);
+    const [{data:allBatches},{data:moves}] = await Promise.all([
+      window.dzSupabase.from("distro_batches").select("medicine_id, current_quantity, distro_medicines(product_name)").eq("organization_id",dzOrgId).gt("current_quantity",0),
+      window.dzSupabase.from("distro_stock_ledger").select("product_id").eq("organization_id",dzOrgId).eq("transaction_type","Sale Outward").gte("created_at",since.toISOString()),
+    ]);
+    const movedIds = new Set((moves||[]).map(m=>m.product_id));
+    const dead = (allBatches||[]).filter(b => !movedIds.has(b.medicine_id));
+    host.innerHTML = dead.length ? dead.map(b=>`<div style="padding:6px 0;border-bottom:1px solid var(--slate-100)">${dzEsc(b.distro_medicines?.product_name)} — ${b.current_quantity} units, no sale in 60 days</div>`).join("") : dzEmptyState("✓","No dead stock detected","");
+  }
+
+  if (key === "sales") {
+    const since = new Date(); since.setDate(since.getDate()-30);
+    const { data } = await window.dzSupabase.from("distro_invoices").select("total_amount, distro_retailers(shop_name)").eq("organization_id",dzOrgId).gte("created_at",since.toISOString());
+    const total = (data||[]).reduce((s,i)=>s+(i.total_amount||0),0);
+    host.innerHTML = `<div style="font-weight:700;margin-bottom:8px">Total Sales (30d): Rs ${total.toLocaleString(undefined,{minimumFractionDigits:2})} (${(data||[]).length} invoices)</div>
+      <table><thead><tr><th>Retailer</th><th>Amount</th></tr></thead><tbody>${(data||[]).map(i=>`<tr><td>${dzEsc(i.distro_retailers?.shop_name)}</td><td>${(i.total_amount||0).toFixed(2)}</td></tr>`).join("")}</tbody></table>`;
+  }
+
+  if (key === "receivables") {
+    const { data } = await window.dzSupabase.from("distro_retailers").select("shop_name,current_balance,credit_limit").eq("organization_id",dzOrgId).gt("current_balance",0).order("current_balance",{ascending:false});
+    const total = (data||[]).reduce((s,r)=>s+(r.current_balance||0),0);
+    host.innerHTML = `<div style="font-weight:700;margin-bottom:8px">Total Receivables: Rs ${total.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+      <table><thead><tr><th>Retailer</th><th>Outstanding</th><th>Limit</th></tr></thead><tbody>${(data||[]).map(r=>`<tr><td>${dzEsc(r.shop_name)}</td><td>${(r.current_balance||0).toFixed(2)}</td><td>${(r.credit_limit||0).toFixed(2)}</td></tr>`).join("")}</tbody></table>`;
+  }
+
+  if (key === "payables") {
+    const { data } = await window.dzSupabase.from("distro_suppliers").select("name,current_payable").eq("organization_id",dzOrgId).gt("current_payable",0).order("current_payable",{ascending:false});
+    const total = (data||[]).reduce((s,r)=>s+(r.current_payable||0),0);
+    host.innerHTML = `<div style="font-weight:700;margin-bottom:8px">Total Payables: Rs ${total.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+      <table><thead><tr><th>Supplier</th><th>Payable</th></tr></thead><tbody>${(data||[]).map(s=>`<tr><td>${dzEsc(s.name)}</td><td>${(s.current_payable||0).toFixed(2)}</td></tr>`).join("")}</tbody></table>`;
+  }
+}
+</script>
+</body>
+</html>
