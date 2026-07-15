@@ -1,6 +1,18 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script>
+// Feature flag: Patient Portal temporarily disabled. Source preserved for
+// future reactivation - flip this to true (and restore the shell.js nav
+// item) to bring it back online.
+const patientPortalEnabled = false;
+if (!patientPortalEnabled) {
+  document.write('<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:sans-serif;text-align:center;padding:20px"><div><h2>Patient Portal is temporarily unavailable</h2><p style="color:#666">Please contact the clinic directly for assistance.</p></div></div>');
+  document.close();
+  throw new Error("Patient Portal disabled by feature flag");
+}
+</script>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Patient Portal — Dr. Zaid Healthcare OS</title>
