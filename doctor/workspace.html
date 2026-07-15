@@ -64,13 +64,16 @@
 <script src="../shared/visit-status.js?v=20260710c"></script>
 <script src="../shared/prescription-safety.js?v=20260710c"></script>
 <script src="../shared/prescription-renderer.js?v=20260710c"></script>
+<script src="../shared/auth-role-service.js"></script>
 <script src="../shared/organization-settings-service.js"></script>
 <script src="../shared/report-vision-uploader.js?v=20260711fix"></script>
 <script src="../shared/report-analyzer.js?v=20260710c"></script>
 <script>
 let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCurrentVitals=null;
 (async () => {
+  console.log("[Doctor Init] Starting Doctor Workspace…");
   const session = await dzRequireSession(["org_owner","branch_admin","super_admin","doctor"]);
+  console.log("[Doctor Auth]", session ? "Session OK, role=" + session.profile.role : "No session - redirecting");
   if (!session) return;
   dzOrgId = session.profile.organization_id;
   dzDoctorId = session.profile.id;
@@ -87,6 +90,15 @@ let dzOrgId=null, dzDoctorId=null, dzQueue=[], dzSelected=null, dzMeds=[], dzCur
       <h2 style="font-size:13px">🧪 Pending Lab Results</h2>
       <div id="labResultsList"></div>
     </div>
+    <div class="dz-panel" id="emrSearchPanel">
+      <h2 style="font-size:13px">🔍 Find Patient by EMR / Phone / Name</h2>
+      <div style="display:flex;gap:8px;max-width:420px">
+        <input id="emrSearchInput" placeholder="DZ-EMR-000123, phone, or name" style="flex:1;padding:9px;border:1px solid var(--slate-200);border-radius:7px;font-size:13px" onkeydown="if(event.key==='Enter'){event.preventDefault();dzSearchPatientHistory();}">
+        <button class="primary-btn" onclick="dzSearchPatientHistory()">Search</button>
+      </div>
+      <div id="emrSearchResults" style="margin-top:10px"></div>
+    </div>
+    <div id="patientHistoryModal" style="display:none"></div>
     <div class="wsGrid">
       <div class="dz-panel" style="padding:12px">
         <h2 style="font-size:13px;margin-bottom:8px">Your Queue</h2>
@@ -383,6 +395,99 @@ function dzReadMedsFromDom() {
   return out;
 }
 function dzAddMedRow() { dzMeds.push({name:"",dosage:"",frequency:"",duration:""}); dzRenderMeds(); }
+
+/** Find Patient by EMR / phone / name - real search, no new patient/visit created. */
+async function dzSearchPatientHistory() {
+  const q = document.getElementById("emrSearchInput").value.trim();
+  const host = document.getElementById("emrSearchResults");
+  if (!q) return;
+  host.innerHTML = `<div style="font-size:12px;color:var(--slate-500)">Searching…</div>`;
+  const { data, error } = await window.dzSupabase.from("patients")
+    .select("id, full_name, emr_number, phone, age, gender")
+    .eq("organization_id", dzOrgId)
+    .or(`emr_number.ilike.%${q}%,phone.ilike.%${q}%,full_name.ilike.%${q}%`)
+    .limit(10);
+  if (error) { host.innerHTML = `<div style="color:var(--signal-critical);font-size:12px">${error.message}</div>`; return; }
+  if (!data || !data.length) { host.innerHTML = `<div style="font-size:12px;color:var(--slate-500)">No matching patient found.</div>`; return; }
+  host.innerHTML = data.map(p => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border:1px solid var(--slate-200);border-radius:7px;margin-bottom:6px">
+      <div><b>${dzEsc(p.full_name)}</b> <span style="font-size:11px;color:var(--slate-500)">${dzEsc(p.emr_number)||'No EMR'} · ${p.age||'?'}y ${dzEsc(p.gender)||''} · ${dzEsc(p.phone)||''}</span></div>
+      <button class="ai-btn" style="background:var(--clinical-700);color:#fff" onclick="dzOpenPatientHistory('${p.id}')">Open History</button>
+    </div>`).join("");
+}
+
+/** Complete longitudinal record - read-only timeline. Does NOT create any visit/token. */
+async function dzOpenPatientHistory(patientId) {
+  console.log("[Doctor Patient Load] Loading full history for", patientId);
+  const modal = document.getElementById("patientHistoryModal");
+  modal.style.display = "block";
+  modal.innerHTML = `<div class="dz-panel" style="position:fixed;inset:20px;overflow-y:auto;z-index:400;background:#fff;box-shadow:0 10px 40px rgba(0,0,0,.2)">Loading complete history…</div>`;
+
+  const [{data:patient},{data:allergies},{data:chronic},{data:activeMeds},{data:visits},{data:prescriptions},{data:labOrders},{data:pharmacyRecords}] = await Promise.all([
+    window.dzSupabase.from("patients").select("*").eq("id",patientId).single(),
+    window.dzSupabase.from("allergies").select("*").eq("patient_id",patientId),
+    window.dzSupabase.from("chronic_conditions").select("*").eq("patient_id",patientId),
+    window.dzSupabase.from("active_medications").select("*").eq("patient_id",patientId),
+    window.dzSupabase.from("visits").select("*").eq("patient_id",patientId).order("created_at",{ascending:false}),
+    window.dzSupabase.from("prescriptions").select("*, prescription_items(*)").eq("patient_id",patientId).order("created_at",{ascending:false}),
+    window.dzSupabase.from("lab_queue").select("*").eq("patient_id",patientId).order("created_at",{ascending:false}),
+    window.dzSupabase.from("pharmacy_queue").select("*").eq("patient_id",patientId).order("created_at",{ascending:false}),
+  ]);
+
+  window._dzHistoryPatient = patient;
+  const timeline = [];
+  (visits||[]).forEach(v => timeline.push({ type: "Visit", date: v.created_at, detail: v.chief_complaint, status: v.status }));
+  (prescriptions||[]).forEach(p => timeline.push({ type: "Prescription", date: p.created_at, detail: p.diagnosis, id: p.id, items: p.prescription_items }));
+  (labOrders||[]).forEach(l => timeline.push({ type: "Lab", date: l.created_at, detail: l.test_name + " — " + l.status, critical: l.critical_findings?.length }));
+  (pharmacyRecords||[]).forEach(ph => timeline.push({ type: "Pharmacy", date: ph.created_at, detail: ph.medicine_name + " — " + ph.status }));
+  timeline.sort((a,b) => new Date(b.date) - new Date(a.date));
+
+  modal.innerHTML = `
+    <div class="dz-panel" style="position:fixed;inset:20px;overflow-y:auto;z-index:400;background:#fff;box-shadow:0 10px 40px rgba(0,0,0,.2)">
+      <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--slate-200);padding-bottom:10px;margin-bottom:12px">
+        <div><h2 style="margin:0">${dzEsc(patient.full_name)} — ${dzEsc(patient.emr_number)||'No EMR'}</h2>
+          <div style="font-size:12px;color:var(--slate-500)">${patient.age||'?'}y ${dzEsc(patient.gender)||''} · ${dzEsc(patient.phone)||''} · ${dzEsc(patient.address)||''}</div></div>
+        <button class="ghost-refresh" onclick="document.getElementById('patientHistoryModal').style.display='none'">Close ✕</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <button class="primary-btn" onclick="dzStartNewVisitFromHistory('${patientId}')">Start New Visit</button>
+      </div>
+      ${(allergies&&allergies.length) ? `<div class="warnBar" style="background:#FDECEC;color:var(--signal-critical);padding:8px 12px;border-radius:6px;margin-bottom:10px"><b>⚠ Allergies:</b> ${allergies.map(a=>dzEsc(a.allergy)).join(", ")}</div>` : ''}
+      ${(chronic&&chronic.length) ? `<div style="background:#FFF7E6;color:var(--signal-warning);padding:8px 12px;border-radius:6px;margin-bottom:10px"><b>Chronic Conditions:</b> ${chronic.map(c=>dzEsc(c.condition||c.name)).join(", ")}</div>` : ''}
+      ${(activeMeds&&activeMeds.length) ? `<div style="background:var(--slate-50);padding:8px 12px;border-radius:6px;margin-bottom:10px"><b>Current Medicines:</b> ${activeMeds.map(m=>dzEsc(m.medicine_name)).join(", ")}</div>` : ''}
+      <h3 style="font-size:13px;margin-bottom:8px">Complete Timeline (${timeline.length} events)</h3>
+      ${timeline.length ? timeline.map(t => `
+        <div style="border-left:3px solid var(--clinical-700);padding:6px 0 6px 12px;margin-bottom:8px">
+          <div style="font-size:11px;color:var(--slate-500)">${new Date(t.date).toLocaleString()} — <b>${t.type}</b> ${t.critical?'<span style="color:var(--signal-critical);font-weight:700">🚨</span>':''}</div>
+          <div style="font-size:13px">${dzEsc(t.detail)||'-'}</div>
+          ${t.type==='Prescription' ? `<button class="ai-btn" style="margin-top:4px" onclick="dzReprintPrescription('${t.id}')">Reprint</button>` : ''}
+        </div>`).join("") : '<div style="color:var(--slate-500);font-size:12px">No previous records found for this patient.</div>'}
+    </div>`;
+}
+
+async function dzStartNewVisitFromHistory(patientId) {
+  document.getElementById("patientHistoryModal").style.display = "none";
+  const patient = window._dzHistoryPatient;
+  const complaint = prompt("Chief complaint for this new visit?");
+  if (!complaint) return;
+  const { data: visit, error: vErr } = await window.dzSupabase.from("visits").insert({
+    organization_id: dzOrgId, patient_id: patientId, chief_complaint: complaint, status: "waiting_doctor",
+  }).select("id").single();
+  if (vErr) { alert("Failed: " + vErr.message); return; }
+  const { count } = await window.dzSupabase.from("tokens").select("id",{count:"exact",head:true}).eq("organization_id",dzOrgId);
+  await window.dzSupabase.from("tokens").insert({
+    organization_id: dzOrgId, patient_id: patientId, visit_id: visit.id, token_number: (count||0)+1,
+    source: "doctor_history", priority: "normal", payment_status: "unpaid", status: "with_doctor",
+  });
+  console.log("[Doctor Patient Load] New visit created from history", { patientId, visitId: visit.id });
+  alert("New visit created — refreshing your queue.");
+  await dzLoadQueue();
+}
+
+function dzReprintPrescription(prescriptionId) {
+  window.open(`../print-desk/view.html?prescription=${prescriptionId}`, "_blank");
+}
+
 
 /** PART 7 — Doctor Order Lab Test */
 async function dzSendToLab() {
