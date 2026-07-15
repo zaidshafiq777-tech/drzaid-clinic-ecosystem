@@ -12,7 +12,8 @@ const DZ_NAV_ITEMS = [
   { key: "lab",        label: "Lab",             href: "../lab/dashboard.html",       icon: "⚗", roles: ["org_owner","branch_admin","super_admin","lab_technician"] },
   { key: "printdesk",  label: "Print Desk",      href: "../print-desk/dashboard.html", icon: "🖨", roles: ["org_owner","branch_admin","super_admin","doctor","receptionist"] },
   { key: "distribution", label: "Distribution",  href: "../distribution/dashboard.html", icon: "📦", roles: ["org_owner","branch_admin","super_admin"], group: "business" },
-  { key: "patient",    label: "Patient Portal",  href: "../patient/portal.html",      icon: "⌂", roles: ["org_owner","branch_admin","super_admin","receptionist"] },
+  // Patient Portal temporarily disabled (patientPortalEnabled = false) - source preserved, not deleted. Re-enable by uncommenting.
+  // { key: "patient",    label: "Patient Portal",  href: "../patient/portal.html",      icon: "⌂", roles: ["org_owner","branch_admin","super_admin","receptionist"] },
   { key: "settings",   label: "Settings",        href: "../settings/settings.html",   icon: "⚙", roles: ["org_owner","branch_admin","super_admin"] },
 ];
 
